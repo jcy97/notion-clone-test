@@ -197,7 +197,6 @@ export const searchBlocks = (blocks: Block[], searchTerm: string): Block[] => {
 };
 
 // 블록 내용 요약 (미리보기용)
-// 블록 내용 요약 (미리보기용) - 수정된 버전
 export const getBlockPreview = (
   block: Block,
   maxLength: number = 100
