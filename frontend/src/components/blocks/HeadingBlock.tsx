@@ -41,7 +41,8 @@ export const HeadingBlock: React.FC<Props> = ({
     (block as any).level || (block as any).metadata?.level || 1;
   const [level, setLevel] = useState<1 | 2 | 3>(currentLevel as 1 | 2 | 3);
   const editorRef = useRef<HTMLDivElement>(null);
-  const isUpdatingRef = useRef(false);
+  const isUpdatingFromYjs = useRef(false);
+  const isUpdatingToYjs = useRef(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const cursorUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -63,9 +64,9 @@ export const HeadingBlock: React.FC<Props> = ({
   }, []);
 
   const syncWithYText = useCallback(() => {
-    if (!ytext || !editorRef.current || isUpdatingRef.current) return;
+    if (!ytext || !editorRef.current || isUpdatingToYjs.current) return;
 
-    isUpdatingRef.current = true;
+    isUpdatingFromYjs.current = true;
     const ytextContent = ytext.toString();
 
     if (editorRef.current.textContent !== ytextContent) {
@@ -89,18 +90,30 @@ export const HeadingBlock: React.FC<Props> = ({
         }
       }
     }
-    isUpdatingRef.current = false;
+
+    setTimeout(() => {
+      isUpdatingFromYjs.current = false;
+    }, 0);
   }, [ytext, isSelected]);
 
   useEffect(() => {
     if (!ytext) return;
 
     const handleYTextChange = () => {
-      syncWithYText();
+      if (!isUpdatingToYjs.current) {
+        syncWithYText();
+      }
     };
 
     ytext.observe(handleYTextChange);
-    syncWithYText();
+
+    if (
+      editorRef.current &&
+      !editorRef.current.textContent &&
+      ytext.length > 0
+    ) {
+      syncWithYText();
+    }
 
     return () => {
       ytext.unobserve(handleYTextChange);
@@ -108,16 +121,25 @@ export const HeadingBlock: React.FC<Props> = ({
   }, [ytext, syncWithYText]);
 
   useEffect(() => {
-    if (!ytext || !editorRef.current?.textContent) return;
+    if (!ytext || !editorRef.current?.textContent || isUpdatingFromYjs.current)
+      return;
 
     const currentContent = editorRef.current.textContent;
     const ytextContent = ytext.toString();
 
-    if (currentContent && ytextContent !== currentContent) {
+    if (
+      currentContent &&
+      ytextContent !== currentContent &&
+      !isUpdatingToYjs.current
+    ) {
+      isUpdatingToYjs.current = true;
       ytext.delete(0, ytext.length);
       ytext.insert(0, currentContent);
+      setTimeout(() => {
+        isUpdatingToYjs.current = false;
+      }, 0);
     }
-  }, [block.id, ytext]);
+  }, [block.content, ytext]);
 
   const updateCursorPosition = useCallback(() => {
     if (!isSelected || !onCursorMove || !editorRef.current) return;
@@ -139,19 +161,23 @@ export const HeadingBlock: React.FC<Props> = ({
 
   const handleInput = useCallback(
     (e: React.FormEvent) => {
-      if (isUpdatingRef.current || !ytext) return;
+      if (isUpdatingFromYjs.current) return;
 
       const target = e.target as HTMLDivElement;
       const newContent = target.textContent || "";
 
-      isUpdatingRef.current = true;
-
-      ytext.delete(0, ytext.length);
-      if (newContent) {
-        ytext.insert(0, newContent);
-      }
-
       onUpdate(block.id, newContent, level);
+
+      if (ytext && !isUpdatingToYjs.current) {
+        isUpdatingToYjs.current = true;
+        setTimeout(() => {
+          ytext.delete(0, ytext.length);
+          if (newContent) {
+            ytext.insert(0, newContent);
+          }
+          isUpdatingToYjs.current = false;
+        }, 0);
+      }
 
       if (!isTyping && onTypingStart) {
         setIsTyping(true);
@@ -170,7 +196,6 @@ export const HeadingBlock: React.FC<Props> = ({
       }, 1000);
 
       setTimeout(() => {
-        isUpdatingRef.current = false;
         updateCursorPosition();
       }, 0);
     },
@@ -273,6 +298,16 @@ export const HeadingBlock: React.FC<Props> = ({
     };
   }, []);
 
+  useEffect(() => {
+    if (
+      !isUpdatingFromYjs.current &&
+      editorRef.current &&
+      block.content !== editorRef.current.textContent
+    ) {
+      editorRef.current.textContent = block.content;
+    }
+  }, [block.content]);
+
   const getHeadingClass = () => {
     switch (level) {
       case 1:
@@ -332,9 +367,7 @@ export const HeadingBlock: React.FC<Props> = ({
           onBlur={handleBlur}
           className={`outline-none min-h-[2rem] text-gray-900 placeholder-gray-400 relative ${getHeadingClass()}`}
           data-placeholder="헤딩을 입력하세요..."
-        >
-          {block.content}
-        </div>
+        />
 
         {blockCursors.map((cursor) => {
           const element = editorRef.current;

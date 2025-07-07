@@ -43,6 +43,7 @@ export const useYDoc = ({
   const providerRef = useRef<SocketIOProvider | null>(null);
   const blocksMapRef = useRef<Y.Map<any> | null>(null);
   const awarenessRef = useRef<any>(null);
+  const lastBlocksHashRef = useRef<string>("");
 
   const stableOnBlocksChange = useCallback(onBlocksChange || (() => {}), []);
   const stableOnUsersChange = useCallback(onUsersChange || (() => {}), []);
@@ -83,7 +84,31 @@ export const useYDoc = ({
         id,
         ...(data as Record<string, any>),
       }));
-      stableOnBlocksChange(blocks);
+
+      console.log("YJS handleBlocksChange:", blocks);
+
+      if (blocks.length === 0) {
+        console.log("YJS blocks empty, not triggering change");
+        return;
+      }
+
+      const blocksHash = JSON.stringify(
+        blocks.map((b: any) => ({
+          id: b.id,
+          content: b.content || "",
+          position: b.position || 0,
+        }))
+      );
+
+      if (blocksHash !== lastBlocksHashRef.current) {
+        lastBlocksHashRef.current = blocksHash;
+        console.log(
+          "YJS triggering onBlocksChange with",
+          blocks.length,
+          "blocks"
+        );
+        stableOnBlocksChange(blocks);
+      }
     };
 
     blocksMap.observe(handleBlocksChange);
@@ -136,7 +161,9 @@ export const useYDoc = ({
     if (!blocksMapRef.current) return;
 
     ydocRef.current?.transact(() => {
+      const existingBlock = blocksMapRef.current!.get(blockId);
       blocksMapRef.current!.set(blockId, {
+        ...existingBlock,
         ...content,
         id: blockId,
         updatedAt: new Date().toISOString(),

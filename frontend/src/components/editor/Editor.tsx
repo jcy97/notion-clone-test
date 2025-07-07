@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Block, BlockType } from "../../types/block.types";
 import { Page } from "../../types/page.types";
 import { TextBlock } from "../blocks/TextBlock";
@@ -36,14 +36,13 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   const [pendingBlockId, setPendingBlockId] = useState<string | null>(null);
   const [pageTitle, setPageTitle] = useState(page.title);
 
+  const isUpdatingFromYjs = useRef(false);
+
   const {
     isConnected: yIsConnected,
     userCursors: yCursors,
     userSelections: ySelections,
     onlineUsers: yUsers,
-    updateBlock: updateYBlock,
-    addBlock: addYBlock,
-    deleteBlock: deleteYBlock,
     setUserInfo,
     setCursor,
     setSelection,
@@ -53,16 +52,21 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   } = useYDoc({
     pageId: page.id,
     onBlocksChange: useCallback((yBlocks: any) => {
-      if (yBlocks && yBlocks.length > 0) {
+      console.log("YJS blocks change:", yBlocks);
+      if (yBlocks && yBlocks.length > 0 && !isUpdatingFromYjs.current) {
+        isUpdatingFromYjs.current = true;
         const sortedBlocks = yBlocks.sort(
           (a: any, b: any) => (a.position || 0) - (b.position || 0)
         );
         setBlocks(sortedBlocks);
+        setTimeout(() => {
+          isUpdatingFromYjs.current = false;
+        }, 200);
+      } else if (yBlocks && yBlocks.length === 0) {
+        console.log("YJS blocks empty, ignoring");
       }
     }, []),
-    onUsersChange: useCallback((users: any) => {
-      // YJS Users 업데이트는 조용히 처리
-    }, []),
+    onUsersChange: useCallback((users: any) => {}, []),
   });
 
   const {
@@ -95,7 +99,9 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   }, [user, setUserInfo]);
 
   useEffect(() => {
-    setBlocks(reorderBlocks(page.blocks || []));
+    if (!isUpdatingFromYjs.current) {
+      setBlocks(reorderBlocks(page.blocks || []));
+    }
     setPageTitle(page.title);
   }, [page]);
 
@@ -114,10 +120,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
           setBlocks([newBlock]);
           setSelectedBlockId(newBlock.id);
-
-          if (addYBlock) {
-            addYBlock(newBlock.id, newBlock, 0);
-          }
         } catch (error) {
           console.error("첫 블록 생성 실패:", error);
         }
@@ -125,7 +127,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     };
 
     createFirstBlock();
-  }, [blocks?.length, page.id, createBlockText, addYBlock]);
+  }, [blocks?.length, page.id, createBlockText]);
 
   const handleTitleUpdate = useCallback(
     async (newTitle: string) => {
@@ -143,6 +145,8 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
   const updateBlock = useCallback(
     async (blockId: string, content: string, extra?: any) => {
+      if (isUpdatingFromYjs.current) return;
+
       try {
         const updateData = { content, ...extra };
 
@@ -153,16 +157,32 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           })
         );
 
-        if (updateYBlock) {
-          updateYBlock(blockId, { ...updateData, content });
-        }
-
         await api.put(`/pages/${page.id}/blocks/${blockId}`, updateData);
       } catch (error) {
         console.error("블록 업데이트 실패:", error);
+        setBlocks((prev) =>
+          updateBlockUtil(prev, blockId, {
+            content: prev.find((b) => b.id === blockId)?.content || "",
+            updatedAt: new Date(),
+          })
+        );
       }
     },
-    [page.id, updateYBlock]
+    [page.id]
+  );
+
+  const updateBlockFromYjs = useCallback(
+    (blockId: string, content: string, extra?: any) => {
+      const updateData = { content, ...extra };
+
+      setBlocks((prev) =>
+        updateBlockUtil(prev, blockId, {
+          ...updateData,
+          updatedAt: new Date(),
+        })
+      );
+    },
+    []
   );
 
   const createNewBlock = useCallback(
@@ -173,13 +193,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           : null;
         const position = afterBlock ? afterBlock.position + 1 : blocks.length;
 
-        const tempBlock = createBlock(type, "", position, page.id);
-
-        setBlocks((prev) =>
-          insertBlockAtPosition(prev, tempBlock, afterBlockId)
-        );
-        setSelectedBlockId(tempBlock.id);
-
         const response = await api.post(`/pages/${page.id}/blocks`, {
           type,
           content: "",
@@ -188,15 +201,13 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
         const newBlock = response.data.block;
 
-        setBlocks((prev) => updateBlockUtil(prev, tempBlock.id, newBlock));
+        setBlocks((prev) =>
+          insertBlockAtPosition(prev, newBlock, afterBlockId)
+        );
         setSelectedBlockId(newBlock.id);
 
         if (type === "text" && createBlockText) {
           createBlockText(newBlock.id, "");
-        }
-
-        if (addYBlock) {
-          addYBlock(newBlock.id, newBlock, position);
         }
 
         return newBlock;
@@ -204,7 +215,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         console.error("블록 생성 실패:", error);
       }
     },
-    [page.id, blocks, createBlockText, addYBlock]
+    [page.id, blocks, createBlockText]
   );
 
   const deleteBlock = useCallback(
@@ -213,10 +224,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         await api.delete(`/pages/${page.id}/blocks/${blockId}`);
 
         setBlocks((prev) => removeBlock(prev, blockId));
-
-        if (deleteYBlock) {
-          deleteYBlock(blockId);
-        }
 
         if (deleteBlockText) {
           deleteBlockText(blockId);
@@ -232,7 +239,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         console.error("블록 삭제 실패:", error);
       }
     },
-    [page.id, blocks, deleteYBlock, deleteBlockText]
+    [page.id, blocks, deleteBlockText]
   );
 
   const handleNewBlock = useCallback(
@@ -338,7 +345,9 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
               block={block}
               onUpdate={updateBlock}
               onNewBlock={handleNewBlock}
-              //ytext={getBlockText ? getBlockText(block.id) : undefined}
+              ytext={
+                getBlockText ? getBlockText(block.id) || undefined : undefined
+              }
             />
           </div>
         );
@@ -352,6 +361,9 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
                 updateBlock(id, content, { level })
               }
               onNewBlock={handleNewBlock}
+              ytext={
+                getBlockText ? getBlockText(block.id) || undefined : undefined
+              }
             />
           </div>
         );

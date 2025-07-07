@@ -38,7 +38,8 @@ export const TextBlock: React.FC<Props> = ({
   const [isComposing, setIsComposing] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
-  const isUpdatingRef = useRef(false);
+  const isUpdatingFromYjs = useRef(false);
+  const isUpdatingToYjs = useRef(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const cursorUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -60,9 +61,9 @@ export const TextBlock: React.FC<Props> = ({
   }, []);
 
   const syncWithYText = useCallback(() => {
-    if (!ytext || !editorRef.current || isUpdatingRef.current) return;
+    if (!ytext || !editorRef.current || isUpdatingToYjs.current) return;
 
-    isUpdatingRef.current = true;
+    isUpdatingFromYjs.current = true;
     const ytextContent = ytext.toString();
 
     if (editorRef.current.textContent !== ytextContent) {
@@ -86,18 +87,30 @@ export const TextBlock: React.FC<Props> = ({
         }
       }
     }
-    isUpdatingRef.current = false;
+
+    setTimeout(() => {
+      isUpdatingFromYjs.current = false;
+    }, 0);
   }, [ytext, isSelected]);
 
   useEffect(() => {
     if (!ytext) return;
 
     const handleYTextChange = () => {
-      syncWithYText();
+      if (!isUpdatingToYjs.current) {
+        syncWithYText();
+      }
     };
 
     ytext.observe(handleYTextChange);
-    syncWithYText();
+
+    if (
+      editorRef.current &&
+      !editorRef.current.textContent &&
+      ytext.length > 0
+    ) {
+      syncWithYText();
+    }
 
     return () => {
       ytext.unobserve(handleYTextChange);
@@ -105,16 +118,25 @@ export const TextBlock: React.FC<Props> = ({
   }, [ytext, syncWithYText]);
 
   useEffect(() => {
-    if (!ytext || !editorRef.current?.textContent) return;
+    if (!ytext || !editorRef.current?.textContent || isUpdatingFromYjs.current)
+      return;
 
     const currentContent = editorRef.current.textContent;
     const ytextContent = ytext.toString();
 
-    if (currentContent && ytextContent !== currentContent) {
+    if (
+      currentContent &&
+      ytextContent !== currentContent &&
+      !isUpdatingToYjs.current
+    ) {
+      isUpdatingToYjs.current = true;
       ytext.delete(0, ytext.length);
       ytext.insert(0, currentContent);
+      setTimeout(() => {
+        isUpdatingToYjs.current = false;
+      }, 0);
     }
-  }, [block.id, ytext]);
+  }, [block.content, ytext]);
 
   const updateCursorPosition = useCallback(() => {
     if (!isSelected || !onCursorMove || !editorRef.current) return;
@@ -136,22 +158,23 @@ export const TextBlock: React.FC<Props> = ({
 
   const handleInput = useCallback(
     (e: React.FormEvent) => {
-      if (isUpdatingRef.current || !ytext) return;
+      if (isUpdatingFromYjs.current) return;
 
       const target = e.target as HTMLDivElement;
       const newContent = target.textContent || "";
 
-      isUpdatingRef.current = true;
-
-      const selection = window.getSelection();
-      const position = selection?.getRangeAt(0)?.startOffset || 0;
-
-      ytext.delete(0, ytext.length);
-      if (newContent) {
-        ytext.insert(0, newContent);
-      }
-
       onUpdate(block.id, newContent);
+
+      if (ytext && !isUpdatingToYjs.current) {
+        isUpdatingToYjs.current = true;
+        setTimeout(() => {
+          ytext.delete(0, ytext.length);
+          if (newContent) {
+            ytext.insert(0, newContent);
+          }
+          isUpdatingToYjs.current = false;
+        }, 0);
+      }
 
       if (!isTyping && onTypingStart) {
         setIsTyping(true);
@@ -170,7 +193,6 @@ export const TextBlock: React.FC<Props> = ({
       }, 1000);
 
       setTimeout(() => {
-        isUpdatingRef.current = false;
         updateCursorPosition();
       }, 0);
     },
@@ -261,6 +283,16 @@ export const TextBlock: React.FC<Props> = ({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (
+      !isUpdatingFromYjs.current &&
+      editorRef.current &&
+      block.content !== editorRef.current.textContent
+    ) {
+      editorRef.current.textContent = block.content;
+    }
+  }, [block.content]);
 
   const blockTypingUsers = Array.from(typingUsers.values()).filter(
     (user) => user.blockId === block.id
