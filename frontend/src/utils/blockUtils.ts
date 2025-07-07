@@ -148,7 +148,7 @@ export const removeBlock = (blocks: Block[], blockId: string): Block[] => {
   return reorderBlocks(filteredBlocks);
 };
 
-// 블록 업데이트 - 안전한 타입 처리
+// 블록 업데이트 - 안전한 타입 처리 및 테이블 데이터 일관성 보장
 export const updateBlock = (
   blocks: Block[],
   blockId: string,
@@ -157,11 +157,38 @@ export const updateBlock = (
   return blocks.map((block) => {
     if (block.id !== blockId) return block;
 
-    return {
+    let updatedBlock = {
       ...block,
       ...updates,
       updatedAt: new Date(),
     } as Block;
+
+    // 테이블 블록의 경우 데이터 일관성 보장
+    if (block.type === "table") {
+      const tableBlock = updatedBlock as TableBlock;
+
+      // content가 업데이트된 경우 headers와 rows도 동기화
+      if (updates.content && typeof updates.content === "string") {
+        try {
+          const tableData = JSON.parse(updates.content);
+          tableBlock.headers = tableData.headers || [];
+          tableBlock.rows = tableData.rows || [[]];
+        } catch (error) {
+          console.error("테이블 데이터 파싱 오류:", error);
+        }
+      }
+
+      // headers 또는 rows가 직접 업데이트된 경우 content도 동기화
+      if (updates.headers || updates.rows) {
+        const headers = updates.headers || (tableBlock as any).headers || [];
+        const rows = updates.rows || (tableBlock as any).rows || [[]];
+        tableBlock.headers = headers;
+        tableBlock.rows = rows;
+        tableBlock.content = JSON.stringify({ headers, rows });
+      }
+    }
+
+    return updatedBlock;
   });
 };
 
@@ -219,7 +246,24 @@ export const getBlockPreview = (
 
     case "table":
       const tableBlock = block as TableBlock;
-      return `📊 테이블 (${tableBlock.rows.length}행 × ${tableBlock.headers.length}열)`;
+
+      // tableBlock.rows가 직접 있는 경우 (생성 직후)
+      if (tableBlock.rows && tableBlock.headers) {
+        return `📊 테이블 (${tableBlock.rows.length}행 × ${tableBlock.headers.length}열)`;
+      }
+
+      // content에서 파싱해야 하는 경우 (업데이트 후)
+      try {
+        const tableData = JSON.parse(
+          tableBlock.content || '{"headers":["열1","열2"],"rows":[["",""]]}'
+        );
+        const rows = tableData.rows || [[""]];
+        const headers = tableData.headers || ["열1"];
+        return `📊 테이블 (${rows.length}행 × ${headers.length}열)`;
+      } catch (error) {
+        console.error("테이블 데이터 파싱 오류:", error);
+        return `📊 테이블`;
+      }
 
     default:
       // assertNever 함수를 사용하여 exhaustive check
