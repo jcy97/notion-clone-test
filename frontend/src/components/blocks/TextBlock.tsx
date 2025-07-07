@@ -1,5 +1,8 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
+import * as Y from "yjs";
 import { TextBlock as TextBlockType } from "../../types/block.types";
+import { UserCursor } from "../collaboration/UserCursor";
+import { TypingIndicator } from "../collaboration/TypingIndicator";
 
 interface Props {
   block: TextBlockType;
@@ -8,6 +11,13 @@ interface Props {
   onNewBlock: (afterId: string) => void;
   isSelected: boolean;
   onSelect: () => void;
+  ytext?: Y.Text;
+  onCursorMove?: (blockId: string, position: number) => void;
+  onSelectionChange?: (blockId: string, start: number, end: number) => void;
+  onTypingStart?: (blockId: string) => void;
+  onTypingStop?: (blockId: string) => void;
+  userCursors?: Map<string, any>;
+  typingUsers?: Map<string, any>;
 }
 
 export const TextBlock: React.FC<Props> = ({
@@ -17,164 +27,314 @@ export const TextBlock: React.FC<Props> = ({
   onNewBlock,
   isSelected,
   onSelect,
+  ytext,
+  onCursorMove,
+  onSelectionChange,
+  onTypingStart,
+  onTypingStop,
+  userCursors = new Map(),
+  typingUsers = new Map(),
 }) => {
   const [isComposing, setIsComposing] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const inputRef = useRef<HTMLDivElement>(null);
-  const lastSavedContentRef = useRef(block.content);
+  const [isTyping, setIsTyping] = useState(false);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const isUpdatingRef = useRef(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const cursorUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const initialContentRef = useRef(block.content);
+  const colors = [
+    "#FF6B6B",
+    "#4ECDC4",
+    "#45B7D1",
+    "#96CEB4",
+    "#FFEAA7",
+    "#DDA0DD",
+    "#98D8C8",
+  ];
+  const getUserColor = useCallback((userId: string) => {
+    const hash = userId.split("").reduce((a, b) => {
+      a = (a << 5) - a + b.charCodeAt(0);
+      return a & a;
+    }, 0);
+    return colors[Math.abs(hash) % colors.length];
+  }, []);
+
+  const syncWithYText = useCallback(() => {
+    if (!ytext || !editorRef.current || isUpdatingRef.current) return;
+
+    isUpdatingRef.current = true;
+    const ytextContent = ytext.toString();
+
+    if (editorRef.current.textContent !== ytextContent) {
+      const selection = window.getSelection();
+      const range = selection?.getRangeAt(0);
+      const startOffset = range?.startOffset || 0;
+
+      editorRef.current.textContent = ytextContent;
+
+      if (isSelected && selection && range) {
+        const newRange = document.createRange();
+        const textNode = editorRef.current.firstChild;
+        if (textNode) {
+          newRange.setStart(
+            textNode,
+            Math.min(startOffset, ytextContent.length)
+          );
+          newRange.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(newRange);
+        }
+      }
+    }
+    isUpdatingRef.current = false;
+  }, [ytext, isSelected]);
 
   useEffect(() => {
-    if (isSelected && inputRef.current) {
-      inputRef.current.focus();
-    }
-  }, [isSelected]);
+    if (!ytext) return;
+
+    const handleYTextChange = () => {
+      syncWithYText();
+    };
+
+    ytext.observe(handleYTextChange);
+    syncWithYText();
+
+    return () => {
+      ytext.unobserve(handleYTextChange);
+    };
+  }, [ytext, syncWithYText]);
 
   useEffect(() => {
-    if (
-      inputRef.current &&
-      !isEditing &&
-      block.content !== lastSavedContentRef.current
-    ) {
-      inputRef.current.textContent = block.content;
-      lastSavedContentRef.current = block.content;
-      initialContentRef.current = block.content;
+    if (!ytext || !editorRef.current?.textContent) return;
+
+    const currentContent = editorRef.current.textContent;
+    const ytextContent = ytext.toString();
+
+    if (currentContent && ytextContent !== currentContent) {
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, currentContent);
     }
-  }, [block.content, isEditing]);
+  }, [block.id, ytext]);
 
-  const saveContent = (content: string) => {
-    if (content !== lastSavedContentRef.current) {
-      lastSavedContentRef.current = content;
-      onUpdate(block.id, content);
+  const updateCursorPosition = useCallback(() => {
+    if (!isSelected || !onCursorMove || !editorRef.current) return;
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      const position = range.startOffset;
+
+      if (cursorUpdateTimeoutRef.current) {
+        clearTimeout(cursorUpdateTimeoutRef.current);
+      }
+
+      cursorUpdateTimeoutRef.current = setTimeout(() => {
+        onCursorMove(block.id, position);
+      }, 100);
     }
-  };
+  }, [isSelected, onCursorMove, block.id]);
 
-  const startEditing = () => {
-    if (!isEditing) {
-      setIsEditing(true);
-      initialContentRef.current = inputRef.current?.textContent || "";
+  const handleInput = useCallback(
+    (e: React.FormEvent) => {
+      if (isUpdatingRef.current || !ytext) return;
+
+      const target = e.target as HTMLDivElement;
+      const newContent = target.textContent || "";
+
+      isUpdatingRef.current = true;
+
+      const selection = window.getSelection();
+      const position = selection?.getRangeAt(0)?.startOffset || 0;
+
+      ytext.delete(0, ytext.length);
+      if (newContent) {
+        ytext.insert(0, newContent);
+      }
+
+      onUpdate(block.id, newContent);
+
+      if (!isTyping && onTypingStart) {
+        setIsTyping(true);
+        onTypingStart(block.id);
+      }
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      typingTimeoutRef.current = setTimeout(() => {
+        if (onTypingStop) {
+          setIsTyping(false);
+          onTypingStop(block.id);
+        }
+      }, 1000);
+
+      setTimeout(() => {
+        isUpdatingRef.current = false;
+        updateCursorPosition();
+      }, 0);
+    },
+    [
+      ytext,
+      onUpdate,
+      block.id,
+      onTypingStart,
+      onTypingStop,
+      isTyping,
+      updateCursorPosition,
+    ]
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (isComposing) return;
+
+      const currentContent = editorRef.current?.textContent || "";
+
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (onTypingStop && isTyping) {
+          onTypingStop(block.id);
+          setIsTyping(false);
+        }
+        onNewBlock(block.id);
+      }
+
+      if (e.key === "Backspace" && currentContent === "") {
+        e.preventDefault();
+        if (onTypingStop && isTyping) {
+          onTypingStop(block.id);
+          setIsTyping(false);
+        }
+        onDelete(block.id);
+      }
+    },
+    [isComposing, onNewBlock, onDelete, block.id, onTypingStop, isTyping]
+  );
+
+  const handleSelectionChange = useCallback(() => {
+    if (!isSelected || !onSelectionChange || !editorRef.current) return;
+
+    const selection = window.getSelection();
+    if (selection && selection.rangeCount > 0) {
+      const range = selection.getRangeAt(0);
+      if (editorRef.current.contains(range.commonAncestorContainer)) {
+        const start = range.startOffset;
+        const end = range.endOffset;
+
+        if (start !== end) {
+          onSelectionChange(block.id, start, end);
+        }
+      }
     }
-  };
+  }, [isSelected, onSelectionChange, block.id]);
 
-  const finishEditing = () => {
-    if (isEditing) {
-      setIsEditing(false);
-      const content = inputRef.current?.textContent || "";
-      saveContent(content);
+  const handleFocus = useCallback(() => {
+    onSelect();
+    updateCursorPosition();
+  }, [onSelect, updateCursorPosition]);
+
+  const handleBlur = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
     }
-  };
-
-  const cancelEditing = () => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.textContent = initialContentRef.current;
-      setIsEditing(false);
+    if (onTypingStop && isTyping) {
+      onTypingStop(block.id);
+      setIsTyping(false);
     }
-  };
+  }, [onTypingStop, isTyping, block.id]);
 
-  const handleFocus = () => {
-    startEditing();
-  };
-
-  const handleCompositionStart = () => {
-    setIsComposing(true);
-    startEditing();
-  };
-
-  const handleCompositionEnd = () => {
-    setIsComposing(false);
-  };
-
-  const handleInput = () => {
-    startEditing();
-  };
-
-  const handleBlur = () => {
-    finishEditing();
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (isComposing) {
-      return;
-    }
-
-    const currentContent = inputRef.current?.textContent || "";
-
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      finishEditing();
-      onNewBlock(block.id);
-    }
-
-    if (e.key === "Backspace" && currentContent === "") {
-      e.preventDefault();
-      finishEditing();
-      onDelete(block.id);
-    }
-
-    if (e.key === "Escape") {
-      e.preventDefault();
-      cancelEditing();
-      inputRef.current?.blur();
-    }
-
-    if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      finishEditing();
-      startEditing();
-    }
-  };
+  useEffect(() => {
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange);
+    };
+  }, [handleSelectionChange]);
 
   useEffect(() => {
     return () => {
-      if (isEditing && inputRef.current) {
-        const content = inputRef.current.textContent || "";
-        if (content !== lastSavedContentRef.current) {
-          onUpdate(block.id, content);
-        }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      if (cursorUpdateTimeoutRef.current) {
+        clearTimeout(cursorUpdateTimeoutRef.current);
       }
     };
   }, []);
+
+  const blockTypingUsers = Array.from(typingUsers.values()).filter(
+    (user) => user.blockId === block.id
+  );
+
+  const blockCursors = Array.from(userCursors.values()).filter(
+    (cursor) => cursor.cursor?.blockId === block.id
+  );
 
   return (
     <div
       className={`group relative py-1 px-3 rounded hover:bg-gray-50 ${
         isSelected ? "bg-blue-50" : ""
-      } ${isEditing ? "ring-1 ring-blue-200 bg-blue-25" : ""}`}
+      }`}
       onClick={onSelect}
     >
-      <div
-        ref={inputRef}
-        contentEditable
-        suppressContentEditableWarning
-        onInput={handleInput}
-        onKeyDown={handleKeyDown}
-        onCompositionStart={handleCompositionStart}
-        onCompositionEnd={handleCompositionEnd}
-        onFocus={handleFocus}
-        onBlur={handleBlur}
-        className="outline-none min-h-[1.5rem] text-gray-900 placeholder-gray-400"
-        data-placeholder="텍스트를 입력하세요..."
-        style={{
-          wordBreak: "break-word",
-        }}
-      >
-        {block.content}
+      <div className="relative">
+        <div
+          ref={editorRef}
+          contentEditable
+          suppressContentEditableWarning
+          onInput={handleInput}
+          onKeyDown={handleKeyDown}
+          onCompositionStart={() => setIsComposing(true)}
+          onCompositionEnd={() => setIsComposing(false)}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
+          className="outline-none min-h-[1.5rem] text-gray-900 placeholder-gray-400 relative"
+          data-placeholder="텍스트를 입력하세요..."
+          style={{ wordBreak: "break-word" }}
+        />
+
+        {blockCursors.map((cursor) => {
+          const element = editorRef.current;
+          if (!element || !element.firstChild) return null;
+
+          const textNode = element.firstChild as Text;
+          const range = document.createRange();
+          const position = Math.min(
+            cursor.cursor.position,
+            textNode.textContent?.length || 0
+          );
+
+          try {
+            range.setStart(textNode, position);
+            range.setEnd(textNode, position);
+            const rect = range.getBoundingClientRect();
+            const elementRect = element.getBoundingClientRect();
+
+            return (
+              <UserCursor
+                key={cursor.userId}
+                userId={cursor.userId}
+                userName={cursor.userName}
+                userAvatar={cursor.userAvatar}
+                position={{
+                  top: rect.top - elementRect.top,
+                  left: rect.left - elementRect.left,
+                }}
+                color={getUserColor(cursor.userId)}
+              />
+            );
+          } catch {
+            return null;
+          }
+        })}
       </div>
 
-      {isEditing && (
-        <div className="absolute right-2 top-1 text-xs text-gray-500 bg-white px-1 rounded">
-          편집 중
-        </div>
+      {blockTypingUsers.length > 0 && (
+        <TypingIndicator users={blockTypingUsers} />
       )}
 
       <div className="absolute left-0 top-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          className="w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded"
-          onClick={(e) => {
-            e.stopPropagation();
-          }}
-        >
+        <button className="w-6 h-6 text-gray-400 hover:text-gray-600 hover:bg-gray-200 rounded">
           ⋮⋮
         </button>
       </div>

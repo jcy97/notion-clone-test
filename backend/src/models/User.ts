@@ -1,6 +1,7 @@
 import mongoose, { Document, Schema } from "mongoose";
 
 export interface IUser extends Document {
+  _id: mongoose.Types.ObjectId;
   email: string;
   password: string;
   name: string;
@@ -38,7 +39,6 @@ const UserSchema = new Schema<IUser>(
   }
 );
 
-// 비밀번호를 JSON으로 변환할 때 제외
 UserSchema.methods.toJSON = function () {
   const user = this.toObject();
   delete user.password;

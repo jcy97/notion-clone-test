@@ -2,24 +2,54 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import * as Y from "yjs";
 import { SocketIOProvider } from "y-socket.io";
 
-interface UseYDocProps {
-  pageId: string;
-  onUpdate?: (content: any) => void;
+interface UserCursor {
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  blockId: string;
+  position: number;
 }
 
-export const useYDoc = ({ pageId, onUpdate }: UseYDocProps) => {
+interface UserSelection {
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  blockId: string;
+  start: number;
+  end: number;
+}
+
+interface UseYDocProps {
+  pageId: string;
+  onBlocksChange?: (blocks: any[]) => void;
+  onUsersChange?: (users: any[]) => void;
+}
+
+export const useYDoc = ({
+  pageId,
+  onBlocksChange,
+  onUsersChange,
+}: UseYDocProps) => {
   const [isConnected, setIsConnected] = useState(false);
+  const [userCursors, setUserCursors] = useState<Map<string, UserCursor>>(
+    new Map()
+  );
+  const [userSelections, setUserSelections] = useState<
+    Map<string, UserSelection>
+  >(new Map());
+  const [onlineUsers, setOnlineUsers] = useState<any[]>([]);
+
   const ydocRef = useRef<Y.Doc | null>(null);
   const providerRef = useRef<SocketIOProvider | null>(null);
-  const connectionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const blocksMapRef = useRef<Y.Map<any> | null>(null);
+  const awarenessRef = useRef<any>(null);
 
-  // onUpdate를 useCallback으로 메모이제이션
-  const stableOnUpdate = useCallback(onUpdate || (() => {}), [onUpdate]);
+  const stableOnBlocksChange = useCallback(onBlocksChange || (() => {}), []);
+  const stableOnUsersChange = useCallback(onUsersChange || (() => {}), []);
 
-  useEffect(() => {
+  const initializeYDoc = useCallback(() => {
     if (!pageId) return;
 
-    // 기존 연결이 있다면 정리
     if (providerRef.current) {
       providerRef.current.destroy();
     }
@@ -27,222 +57,198 @@ export const useYDoc = ({ pageId, onUpdate }: UseYDocProps) => {
       ydocRef.current.destroy();
     }
 
-    // YJS Document 생성
     const ydoc = new Y.Doc();
     ydocRef.current = ydoc;
 
-    // WebSocket Provider 설정 (더 안정적인 옵션들 추가)
-    const wsUrl = process.env.REACT_APP_WS_URL || "ws://localhost:3001";
+    const token = localStorage.getItem("token");
+    const wsUrl = process.env.REACT_APP_API_URL || "http://localhost:3001";
+
     const provider = new SocketIOProvider(wsUrl, `page-${pageId}`, ydoc, {
-      // 재연결 설정
+      auth: { token },
       autoConnect: true,
-      // 디버깅을 위한 로그 비활성화 (선택사항)
-      disableBc: false,
     });
     providerRef.current = provider;
 
-    // 연결 상태를 debounce로 처리
-    const updateConnectionStatus = (status: string) => {
-      // 기존 타임아웃 클리어
-      if (connectionTimeoutRef.current) {
-        clearTimeout(connectionTimeoutRef.current);
-      }
+    const blocksMap = ydoc.getMap("blocks");
+    blocksMapRef.current = blocksMap;
 
-      // 상태 변경을 지연시켜 빠른 변화 방지
-      connectionTimeoutRef.current = setTimeout(() => {
-        const connected = status === "connected";
-        setIsConnected((prev) => {
-          // 실제로 상태가 변경될 때만 업데이트
-          if (prev !== connected) {
-            console.log(`YJS Connection status: ${status}`);
-            return connected;
+    awarenessRef.current = provider.awareness;
+
+    provider.on("status", (event: { status: string }) => {
+      setIsConnected(event.status === "connected");
+    });
+
+    const handleBlocksChange = () => {
+      const blocks = Array.from(blocksMap.entries()).map(([id, data]) => ({
+        id,
+        ...(data as Record<string, any>),
+      }));
+      stableOnBlocksChange(blocks);
+    };
+
+    blocksMap.observe(handleBlocksChange);
+
+    awarenessRef.current.on("change", () => {
+      const states = awarenessRef.current.getStates();
+      const cursors = new Map<string, UserCursor>();
+      const selections = new Map<string, UserSelection>();
+      const users: any[] = [];
+
+      states.forEach((state: any, clientId: number) => {
+        if (state.user && clientId !== ydoc.clientID) {
+          users.push(state.user);
+
+          if (state.cursor) {
+            cursors.set(state.user.userId, {
+              ...state.user,
+              ...state.cursor,
+            });
           }
-          return prev;
-        });
-      }, 100); // 100ms 디바운스
-    };
 
-    // 연결 상태 모니터링
-    const statusHandler = (event: { status: string }) => {
-      updateConnectionStatus(event.status);
-    };
-
-    provider.on("status", statusHandler);
-
-    // 문서 업데이트 감지
-    const ymap = ydoc.getMap("page-content");
-    let updateTimeout: NodeJS.Timeout | null = null;
-
-    const updateHandler = () => {
-      // 업데이트를 debounce 처리
-      if (updateTimeout) {
-        clearTimeout(updateTimeout);
-      }
-
-      updateTimeout = setTimeout(() => {
-        try {
-          const content = ymap.toJSON();
-          stableOnUpdate(content);
-        } catch (error) {
-          console.error("Error in YJS update handler:", error);
+          if (state.selection) {
+            selections.set(state.user.userId, {
+              ...state.user,
+              ...state.selection,
+            });
+          }
         }
-      }, 50); // 50ms 디바운스
-    };
+      });
 
-    ymap.observe(updateHandler);
+      setUserCursors(cursors);
+      setUserSelections(selections);
+      setOnlineUsers(users);
+      stableOnUsersChange(users);
+    });
 
-    // 정리 함수
     return () => {
-      // 타임아웃 정리
-      if (connectionTimeoutRef.current) {
-        clearTimeout(connectionTimeoutRef.current);
-      }
-      if (updateTimeout) {
-        clearTimeout(updateTimeout);
-      }
-
-      // 이벤트 리스너 제거
-      provider.off("status", statusHandler);
-      ymap.unobserve(updateHandler);
-
-      // 리소스 정리
+      blocksMap.unobserve(handleBlocksChange);
       provider.destroy();
       ydoc.destroy();
-
-      // ref 초기화
-      ydocRef.current = null;
-      providerRef.current = null;
     };
-  }, [pageId]); // onUpdate 제거하고 pageId만 의존성으로 설정
+  }, [pageId, stableOnBlocksChange, stableOnUsersChange]);
 
-  // 블록 업데이트 함수
+  useEffect(() => {
+    const cleanup = initializeYDoc();
+    return cleanup;
+  }, [initializeYDoc]);
+
   const updateBlock = useCallback((blockId: string, content: any) => {
-    if (!ydocRef.current) return;
+    if (!blocksMapRef.current) return;
 
-    try {
-      const ymap = ydocRef.current.getMap("page-content");
-      const blocksMap = (ymap.get("blocks") as Y.Map<any>) || new Y.Map();
-
-      if (!ymap.has("blocks")) {
-        ymap.set("blocks", blocksMap);
-      }
-
-      blocksMap.set(blockId, content);
-    } catch (error) {
-      console.error("Error updating block:", error);
-    }
+    ydocRef.current?.transact(() => {
+      blocksMapRef.current!.set(blockId, {
+        ...content,
+        id: blockId,
+        updatedAt: new Date().toISOString(),
+      });
+    });
   }, []);
 
-  // 블록 삭제 함수
   const deleteBlock = useCallback((blockId: string) => {
-    if (!ydocRef.current) return;
+    if (!blocksMapRef.current) return;
 
-    try {
-      const ymap = ydocRef.current.getMap("page-content");
-      const blocksMap = ymap.get("blocks") as Y.Map<any>;
-
-      if (blocksMap) {
-        blocksMap.delete(blockId);
-      }
-    } catch (error) {
-      console.error("Error deleting block:", error);
-    }
+    ydocRef.current?.transact(() => {
+      blocksMapRef.current!.delete(blockId);
+    });
   }, []);
 
-  // 블록 추가 함수
   const addBlock = useCallback(
     (blockId: string, content: any, position: number) => {
-      if (!ydocRef.current) return;
+      if (!blocksMapRef.current) return;
 
-      try {
-        const ymap = ydocRef.current.getMap("page-content");
-        const blocksMap = (ymap.get("blocks") as Y.Map<any>) || new Y.Map();
-
-        if (!ymap.has("blocks")) {
-          ymap.set("blocks", blocksMap);
-        }
-
-        const blockData = {
+      ydocRef.current?.transact(() => {
+        blocksMapRef.current!.set(blockId, {
           ...content,
+          id: blockId,
           position,
-          timestamp: Date.now(),
-        };
-
-        blocksMap.set(blockId, blockData);
-      } catch (error) {
-        console.error("Error adding block:", error);
-      }
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      });
     },
     []
   );
 
-  // 현재 문서 상태 가져오기
-  const getDocumentState = useCallback(() => {
-    if (!ydocRef.current) return null;
+  const setUserInfo = useCallback((userInfo: any) => {
+    if (!awarenessRef.current) return;
 
-    try {
-      const ymap = ydocRef.current.getMap("page-content");
-      return ymap.toJSON();
-    } catch (error) {
-      console.error("Error getting document state:", error);
-      return null;
-    }
+    awarenessRef.current.setLocalStateField("user", userInfo);
   }, []);
 
-  // 협업자 정보 가져오기
-  const getAwareness = useCallback(() => {
-    return providerRef.current?.awareness || null;
+  const setCursor = useCallback((blockId: string, position: number) => {
+    if (!awarenessRef.current) return;
+
+    awarenessRef.current.setLocalStateField("cursor", {
+      blockId,
+      position,
+    });
   }, []);
 
-  // 사용자 커서 위치 설정
-  const setUserCursor = useCallback(
-    (blockId: string, position: number) => {
-      try {
-        const awareness = getAwareness();
-        if (awareness) {
-          awareness.setLocalStateField("cursor", {
-            blockId,
-            position,
-            timestamp: Date.now(),
-          });
-        }
-      } catch (error) {
-        console.error("Error setting user cursor:", error);
-      }
-    },
-    [getAwareness]
-  );
-
-  // 사용자 선택 영역 설정
-  const setUserSelection = useCallback(
+  const setSelection = useCallback(
     (blockId: string, start: number, end: number) => {
-      try {
-        const awareness = getAwareness();
-        if (awareness) {
-          awareness.setLocalStateField("selection", {
-            blockId,
-            start,
-            end,
-            timestamp: Date.now(),
-          });
-        }
-      } catch (error) {
-        console.error("Error setting user selection:", error);
-      }
+      if (!awarenessRef.current) return;
+
+      awarenessRef.current.setLocalStateField("selection", {
+        blockId,
+        start,
+        end,
+      });
     },
-    [getAwareness]
+    []
   );
+
+  const clearCursor = useCallback(() => {
+    if (!awarenessRef.current) return;
+    awarenessRef.current.setLocalStateField("cursor", null);
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    if (!awarenessRef.current) return;
+    awarenessRef.current.setLocalStateField("selection", null);
+  }, []);
+
+  const getBlockText = useCallback((blockId: string): Y.Text | null => {
+    if (!ydocRef.current) return null;
+    return ydocRef.current.getText(`block-${blockId}`);
+  }, []);
+
+  const createBlockText = useCallback(
+    (blockId: string, initialText: string = ""): Y.Text => {
+      if (!ydocRef.current) throw new Error("YDoc not initialized");
+
+      const ytext = ydocRef.current.getText(`block-${blockId}`);
+      if (ytext.length === 0 && initialText) {
+        ytext.insert(0, initialText);
+      }
+      return ytext;
+    },
+    []
+  );
+
+  const deleteBlockText = useCallback((blockId: string) => {
+    if (!ydocRef.current) return;
+
+    const ytext = ydocRef.current.getText(`block-${blockId}`);
+    ytext.delete(0, ytext.length);
+  }, []);
 
   return {
     isConnected,
-    ydoc: ydocRef.current,
-    provider: providerRef.current,
+    userCursors,
+    userSelections,
+    onlineUsers,
     updateBlock,
     deleteBlock,
     addBlock,
-    getDocumentState,
-    getAwareness,
-    setUserCursor,
-    setUserSelection,
+    setUserInfo,
+    setCursor,
+    setSelection,
+    clearCursor,
+    clearSelection,
+    getBlockText,
+    createBlockText,
+    deleteBlockText,
+    ydoc: ydocRef.current,
+    provider: providerRef.current,
   };
 };

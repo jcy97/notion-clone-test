@@ -7,10 +7,10 @@ import { connectDatabase } from "./utils/database";
 import { setupCollaborationSocket } from "./sockets/collaborationSocket";
 import { YSocketIO } from "y-socket.io/dist/server";
 
-// 라우트 임포트
 import authRoutes from "./routes/auth";
 import pageRoutes from "./routes/pages";
-// 환경변수 로드
+import sharedRoutes from "./routes/shared";
+
 dotenv.config();
 const app = express();
 const server = createServer(app);
@@ -22,12 +22,30 @@ const io = new Server(server, {
   },
 });
 
-const ysocketio = new YSocketIO(io);
+const ysocketio = new YSocketIO(io, {
+  authenticate: async (auth: any): Promise<boolean> => {
+    try {
+      const jwt = await import("jsonwebtoken");
+      const { User } = await import("./models/User");
+
+      if (!auth?.token) return false;
+
+      const jwtSecret = process.env.JWT_SECRET || "your-secret-key";
+      const decoded = jwt.verify(auth.token, jwtSecret) as { userId: string };
+      const user = await User.findById(decoded.userId);
+
+      return !!user;
+    } catch {
+      return false;
+    }
+  },
+  gcEnabled: true,
+});
+
 ysocketio.initialize();
 
 const PORT = process.env.PORT || 3001;
 
-// 미들웨어 설정
 app.use(
   cors({
     origin: process.env.FRONTEND_URL || "http://localhost:3000",
@@ -38,7 +56,6 @@ app.use(
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-// 기본 라우트
 app.get("/", (req, res) => {
   res.json({
     message: "Notion Clone API Server",
@@ -47,11 +64,10 @@ app.get("/", (req, res) => {
   });
 });
 
-// API 라우트
 app.use("/auth", authRoutes);
 app.use("/pages", pageRoutes);
+app.use("/shared", sharedRoutes);
 
-// 404 에러 핸들러
 app.use((req, res) => {
   res.status(404).json({
     message: "요청하신 경로를 찾을 수 없습니다.",
@@ -59,7 +75,6 @@ app.use((req, res) => {
   });
 });
 
-// 글로벌 에러 핸들러
 app.use(
   (
     error: any,
@@ -76,16 +91,12 @@ app.use(
   }
 );
 
-// 소켓 설정
 setupCollaborationSocket(io);
 
-// 서버 시작
 const startServer = async () => {
   try {
-    // 데이터베이스 연결
     await connectDatabase();
 
-    // 서버 시작
     server.listen(PORT, () => {
       console.log(`🚀 서버가 포트 ${PORT}에서 실행 중입니다.`);
       console.log(
@@ -101,7 +112,6 @@ const startServer = async () => {
   }
 };
 
-// 프로세스 종료 핸들링
 process.on("SIGTERM", () => {
   console.log("SIGTERM 신호를 받았습니다. 서버를 종료합니다...");
   server.close(() => {

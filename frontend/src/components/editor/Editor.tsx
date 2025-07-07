@@ -6,8 +6,10 @@ import { HeadingBlock } from "../blocks/HeadingBlock";
 import { ImageBlock } from "../blocks/ImageBlock";
 import { TableBlock } from "../blocks/TableBlock";
 import { BlockSelector } from "./BlockSelector";
-import { useWebSocket } from "../../hooks/useWebSocket";
+import { OnlineUsers, CollaborationStatus } from "../collaboration";
 import { useYDoc } from "../../hooks/useYDoc";
+import { useCollaboration } from "../../hooks/useCollaboration";
+import { useAuth } from "../../hooks/useAuth";
 import { api } from "../../utils/api";
 import {
   createBlock,
@@ -15,7 +17,6 @@ import {
   insertBlockAtPosition,
   removeBlock,
   updateBlock as updateBlockUtil,
-  getBlockPreview,
 } from "../../utils/blockUtils";
 
 interface Props {
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
+  const { user } = useAuth();
   const [blocks, setBlocks] = useState<Block[]>(page.blocks || []);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [showBlockSelector, setShowBlockSelector] = useState(false);
@@ -34,24 +36,63 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   const [pendingBlockId, setPendingBlockId] = useState<string | null>(null);
   const [pageTitle, setPageTitle] = useState(page.title);
 
-  const socket = useWebSocket(page.id);
-
   const {
-    isConnected,
+    isConnected: yIsConnected,
+    userCursors: yCursors,
+    userSelections: ySelections,
+    onlineUsers: yUsers,
     updateBlock: updateYBlock,
     addBlock: addYBlock,
     deleteBlock: deleteYBlock,
-    setUserCursor,
-    setUserSelection,
+    setUserInfo,
+    setCursor,
+    setSelection,
+    getBlockText,
+    createBlockText,
+    deleteBlockText,
   } = useYDoc({
     pageId: page.id,
-    onUpdate: (content) => {
-      if (content.blocks) {
-        const yBlocks = Object.values(content.blocks);
-        setBlocks(reorderBlocks(yBlocks as Block[]));
+    onBlocksChange: useCallback((yBlocks: any) => {
+      if (yBlocks && yBlocks.length > 0) {
+        const sortedBlocks = yBlocks.sort(
+          (a: any, b: any) => (a.position || 0) - (b.position || 0)
+        );
+        setBlocks(sortedBlocks);
       }
-    },
+    }, []),
+    onUsersChange: useCallback((users: any) => {
+      // YJS Users 업데이트는 조용히 처리
+    }, []),
   });
+
+  const {
+    isConnected: socketConnected,
+    onlineUsers: socketUsers,
+    userCursors: socketCursors,
+    userSelections: socketSelections,
+    typingUsers,
+    emitCursorMove,
+    emitSelectionChange,
+    emitTypingStart,
+    emitTypingStop,
+    getUsersInBlock,
+  } = useCollaboration(page.id);
+
+  const isConnected = yIsConnected && socketConnected;
+  const onlineUsers = socketUsers.length > 0 ? socketUsers : yUsers;
+  const userCursors = socketCursors.size > 0 ? socketCursors : yCursors;
+  const userSelections =
+    socketSelections.size > 0 ? socketSelections : ySelections;
+
+  useEffect(() => {
+    if (user && setUserInfo) {
+      setUserInfo({
+        userId: user.id,
+        userName: user.name,
+        userAvatar: user.avatar,
+      });
+    }
+  }, [user, setUserInfo]);
 
   useEffect(() => {
     setBlocks(reorderBlocks(page.blocks || []));
@@ -69,8 +110,14 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           });
 
           const newBlock = response.data.block;
+          const ytext = createBlockText(newBlock.id, "");
+
           setBlocks([newBlock]);
           setSelectedBlockId(newBlock.id);
+
+          if (addYBlock) {
+            addYBlock(newBlock.id, newBlock, 0);
+          }
         } catch (error) {
           console.error("첫 블록 생성 실패:", error);
         }
@@ -78,56 +125,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     };
 
     createFirstBlock();
-  }, [blocks?.length, page.id]);
-
-  useEffect(() => {
-    if (socket) {
-      socket.on("block-updated", (updatedBlock: Block) => {
-        setBlocks((prev) =>
-          updateBlockUtil(prev, updatedBlock.id, updatedBlock)
-        );
-      });
-
-      socket.on("block-created", (newBlock: Block) => {
-        setBlocks((prev) => insertBlockAtPosition(prev, newBlock));
-      });
-
-      socket.on("block-deleted", (deletedBlockId: string) => {
-        setBlocks((prev) => removeBlock(prev, deletedBlockId));
-      });
-
-      socket.on(
-        "user-typing",
-        (data: { userId: string; userName: string; blockId: string }) => {
-          console.log(
-            `${data.userName}이 ${data.blockId} 블록을 편집 중입니다.`
-          );
-        }
-      );
-
-      socket.on(
-        "user-cursor",
-        (data: {
-          userId: string;
-          userName: string;
-          blockId: string;
-          position: number;
-        }) => {
-          console.log(`${data.userName}의 커서 위치:`, data);
-        }
-      );
-    }
-
-    return () => {
-      if (socket) {
-        socket.off("block-updated");
-        socket.off("block-created");
-        socket.off("block-deleted");
-        socket.off("user-typing");
-        socket.off("user-cursor");
-      }
-    };
-  }, [socket]);
+  }, [blocks?.length, page.id, createBlockText, addYBlock]);
 
   const handleTitleUpdate = useCallback(
     async (newTitle: string) => {
@@ -147,12 +145,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     async (blockId: string, content: string, extra?: any) => {
       try {
         const updateData = { content, ...extra };
-        const response = await api.put(
-          `/pages/${page.id}/blocks/${blockId}`,
-          updateData
-        );
-
-        const updatedBlock = response.data.block;
 
         setBlocks((prev) =>
           updateBlockUtil(prev, blockId, {
@@ -161,16 +153,16 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           })
         );
 
-        updateYBlock(blockId, updatedBlock);
-
-        if (socket) {
-          socket.emit("block-update", updatedBlock);
+        if (updateYBlock) {
+          updateYBlock(blockId, { ...updateData, content });
         }
+
+        await api.put(`/pages/${page.id}/blocks/${blockId}`, updateData);
       } catch (error) {
         console.error("블록 업데이트 실패:", error);
       }
     },
-    [page.id, socket, updateYBlock]
+    [page.id, updateYBlock]
   );
 
   const createNewBlock = useCallback(
@@ -182,6 +174,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         const position = afterBlock ? afterBlock.position + 1 : blocks.length;
 
         const tempBlock = createBlock(type, "", position, page.id);
+
         setBlocks((prev) =>
           insertBlockAtPosition(prev, tempBlock, afterBlockId)
         );
@@ -198,10 +191,12 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         setBlocks((prev) => updateBlockUtil(prev, tempBlock.id, newBlock));
         setSelectedBlockId(newBlock.id);
 
-        addYBlock(newBlock.id, newBlock, position);
+        if (type === "text" && createBlockText) {
+          createBlockText(newBlock.id, "");
+        }
 
-        if (socket) {
-          socket.emit("block-create", newBlock);
+        if (addYBlock) {
+          addYBlock(newBlock.id, newBlock, position);
         }
 
         return newBlock;
@@ -209,7 +204,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         console.error("블록 생성 실패:", error);
       }
     },
-    [page.id, blocks, socket, addYBlock]
+    [page.id, blocks, createBlockText, addYBlock]
   );
 
   const deleteBlock = useCallback(
@@ -219,10 +214,12 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
         setBlocks((prev) => removeBlock(prev, blockId));
 
-        deleteYBlock(blockId);
+        if (deleteYBlock) {
+          deleteYBlock(blockId);
+        }
 
-        if (socket) {
-          socket.emit("block-delete", blockId);
+        if (deleteBlockText) {
+          deleteBlockText(blockId);
         }
 
         const blockIndex = blocks.findIndex((b) => b.id === blockId);
@@ -235,7 +232,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         console.error("블록 삭제 실패:", error);
       }
     },
-    [page.id, blocks, socket, deleteYBlock]
+    [page.id, blocks, deleteYBlock, deleteBlockText]
   );
 
   const handleNewBlock = useCallback(
@@ -263,11 +260,24 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [createNewBlock, pendingBlockId]
   );
 
-  const handleCursorChange = useCallback(
+  const handleCursorMove = useCallback(
     (blockId: string, position: number) => {
-      setUserCursor(blockId, position);
+      if (setCursor) {
+        setCursor(blockId, position);
+      }
+      emitCursorMove(blockId, position);
     },
-    [setUserCursor]
+    [setCursor, emitCursorMove]
+  );
+
+  const handleSelectionChange = useCallback(
+    (blockId: string, start: number, end: number) => {
+      if (setSelection) {
+        setSelection(blockId, start, end);
+      }
+      emitSelectionChange(blockId, start, end);
+    },
+    [setSelection, emitSelectionChange]
   );
 
   const handleKeyDown = useCallback(
@@ -309,15 +319,26 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
       onDelete: deleteBlock,
     };
 
+    const collaborationProps = {
+      onCursorMove: handleCursorMove,
+      onSelectionChange: handleSelectionChange,
+      onTypingStart: emitTypingStart,
+      onTypingStop: emitTypingStop,
+      userCursors,
+      typingUsers,
+    };
+
     switch (block.type) {
       case "text":
         return (
           <div data-block-id={block.id}>
             <TextBlock
               {...baseProps}
+              {...collaborationProps}
               block={block}
               onUpdate={updateBlock}
               onNewBlock={handleNewBlock}
+              //ytext={getBlockText ? getBlockText(block.id) : undefined}
             />
           </div>
         );
@@ -366,23 +387,17 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">
       <div className="mb-4 flex items-center justify-between">
-        <div className="text-sm text-gray-500">
-          {isConnected ? (
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-              실시간 동기화 연결됨
-            </span>
-          ) : (
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 bg-red-500 rounded-full"></span>
-              연결 중...
-            </span>
-          )}
-        </div>
+        <CollaborationStatus
+          isConnected={isConnected}
+          onlineCount={onlineUsers.length + 1}
+        />
 
-        <div className="text-sm text-gray-500">
-          {blocks.length}개 블록 • 마지막 수정:{" "}
-          {new Date(page.updatedAt).toLocaleString()}
+        <div className="flex items-center gap-4">
+          <OnlineUsers users={onlineUsers} currentUserId={user?.id} />
+          <div className="text-sm text-gray-500">
+            {blocks.length}개 블록 • 마지막 수정:{" "}
+            {new Date(page.updatedAt).toLocaleString()}
+          </div>
         </div>
       </div>
 
@@ -441,18 +456,11 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           <div>페이지 ID: {page.id}</div>
           <div>블록 수: {blocks.length}</div>
           <div>선택된 블록: {selectedBlockId || "없음"}</div>
-          <div>YJS 연결: {isConnected ? "연결됨" : "연결 안됨"}</div>
-
-          <details className="mt-2">
-            <summary className="cursor-pointer">블록 미리보기</summary>
-            <div className="mt-2 space-y-1">
-              {blocks.map((block) => (
-                <div key={block.id} className="text-xs">
-                  {block.type}: {getBlockPreview(block, 50)}
-                </div>
-              ))}
-            </div>
-          </details>
+          <div>YJS 연결: {yIsConnected ? "연결됨" : "연결 안됨"}</div>
+          <div>Socket 연결: {socketConnected ? "연결됨" : "연결 안됨"}</div>
+          <div>온라인 사용자: {onlineUsers.length}명</div>
+          <div>활성 커서: {userCursors.size}개</div>
+          <div>입력 중: {typingUsers.size}명</div>
         </div>
       )}
     </div>

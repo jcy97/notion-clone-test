@@ -6,13 +6,15 @@ import {
   Navigate,
 } from "react-router-dom";
 import { useAuth } from "./hooks/useAuth";
+import { useCollaboration } from "./hooks/useCollaboration";
 import { Page } from "./types/page.types";
 import { Header } from "./components/layout/Header";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Editor } from "./components/editor/Editor";
 import { Register } from "./components/auth/Register";
-import { api } from "./utils/api";
 import { Login } from "./components/auth/Login";
+import { SharedPage } from "./components/pages/SharedPage";
+import { api } from "./utils/api";
 
 const App: React.FC = () => {
   const { user, loading, logout } = useAuth();
@@ -20,6 +22,10 @@ const App: React.FC = () => {
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
   const [pagesLoading, setPagesLoading] = useState(false);
   const [initialPageSelected, setInitialPageSelected] = useState(false);
+
+  const { onlineUsers, isConnected: collaborationConnected } = useCollaboration(
+    currentPage?.id || ""
+  );
 
   useEffect(() => {
     if (user) {
@@ -35,7 +41,6 @@ const App: React.FC = () => {
       const response = await api.get("/pages");
       setPages(response.data.pages);
 
-      // 첫 번째 페이지를 자동으로 선택하되, 완전한 페이지 정보를 가져옴
       if (response.data.pages.length > 0 && !currentPage) {
         const firstPageId = response.data.pages[0].id;
         await handlePageSelect(firstPageId);
@@ -58,8 +63,6 @@ const App: React.FC = () => {
       });
 
       const newPage = response.data.page;
-
-      // 새 페이지의 완전한 정보를 가져오기
       const fullPageResponse = await api.get(`/pages/${newPage.id}`);
       const fullNewPage = fullPageResponse.data.page;
 
@@ -75,8 +78,6 @@ const App: React.FC = () => {
     try {
       const response = await api.get(`/pages/${pageId}`);
       const fullPage = response.data.page;
-
-      console.log("Selected page:", fullPage); // 디버깅용
 
       setCurrentPage(fullPage);
       setInitialPageSelected(true);
@@ -109,17 +110,49 @@ const App: React.FC = () => {
       const shareUrl = response.data.shareUrl;
 
       await navigator.clipboard.writeText(shareUrl);
-      alert("공유 링크가 클립보드에 복사되었습니다!");
+
+      const notification = document.createElement("div");
+      notification.className =
+        "fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition-all";
+      notification.innerHTML = `
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          공유 링크가 클립보드에 복사되었습니다!
+        </div>
+      `;
+
+      document.body.appendChild(notification);
+
+      setTimeout(() => {
+        notification.style.transform = "translateX(100%)";
+        setTimeout(() => {
+          document.body.removeChild(notification);
+        }, 300);
+      }, 2000);
     } catch (error) {
       console.error("페이지 공유 실패:", error);
-      alert("페이지 공유에 실패했습니다.");
+
+      const errorNotification = document.createElement("div");
+      errorNotification.className =
+        "fixed top-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg z-50";
+      errorNotification.textContent = "페이지 공유에 실패했습니다.";
+      document.body.appendChild(errorNotification);
+
+      setTimeout(() => {
+        document.body.removeChild(errorNotification);
+      }, 3000);
     }
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">로딩 중...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+          <div className="text-lg text-gray-600">로딩 중...</div>
+        </div>
       </div>
     );
   }
@@ -130,55 +163,111 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
+          <Route path="/shared/:shareId" element={<SharedPage />} />
           <Route path="*" element={<Navigate to="/login" />} />
         </Routes>
       </Router>
     );
   }
 
+  const hasCollaborators = onlineUsers.length > 0;
+  const isCollaborating = collaborationConnected && hasCollaborators;
+
   return (
-    <div className="h-screen flex flex-col">
-      <Header
-        user={user}
-        page={currentPage || undefined}
-        onShare={currentPage ? handleShare : undefined}
-        onLogout={logout}
-      />
+    <Router>
+      <Routes>
+        <Route path="/shared/:shareId" element={<SharedPage />} />
+        <Route
+          path="*"
+          element={
+            <div className="h-screen flex flex-col bg-gray-50">
+              <Header
+                user={user}
+                page={currentPage || undefined}
+                onShare={currentPage ? handleShare : undefined}
+                onLogout={logout}
+                onlineUsers={onlineUsers}
+                isCollaborating={isCollaborating}
+              />
 
-      <div className="flex-1 flex overflow-hidden">
-        <Sidebar
-          pages={pages}
-          currentPageId={currentPage?.id}
-          onPageSelect={handlePageSelect}
-          onNewPage={handleNewPage}
-        />
+              <div className="flex-1 flex overflow-hidden">
+                <Sidebar
+                  pages={pages}
+                  currentPageId={currentPage?.id}
+                  onPageSelect={handlePageSelect}
+                  onNewPage={handleNewPage}
+                />
 
-        <main className="flex-1 overflow-auto">
-          {pagesLoading || !initialPageSelected ? (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-lg text-gray-500">페이지 로딩 중...</div>
-            </div>
-          ) : currentPage && currentPage.id ? (
-            <Editor page={currentPage} onPageUpdate={handlePageUpdate} />
-          ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <div className="text-2xl text-gray-400 mb-4">📝</div>
-                <div className="text-lg text-gray-500 mb-4">
-                  페이지를 선택하거나 새로 만들어보세요
-                </div>
-                <button
-                  onClick={handleNewPage}
-                  className="px-6 py-3 bg-blue-500 text-white rounded-md hover:bg-blue-600"
-                >
-                  새 페이지 만들기
-                </button>
+                <main className="flex-1 overflow-auto bg-white">
+                  {pagesLoading || !initialPageSelected ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                        <div className="text-lg text-gray-500">
+                          페이지 로딩 중...
+                        </div>
+                      </div>
+                    </div>
+                  ) : currentPage && currentPage.id ? (
+                    <Editor
+                      page={currentPage}
+                      onPageUpdate={handlePageUpdate}
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center max-w-md">
+                        <div className="text-6xl mb-6">📝</div>
+                        <div className="text-2xl font-semibold text-gray-700 mb-4">
+                          새로운 페이지를 만들어보세요
+                        </div>
+                        <div className="text-gray-500 mb-8">
+                          아이디어를 정리하고, 팀과 협업하고, 지식을 공유하세요.
+                          실시간 협업으로 함께 작업할 수 있습니다.
+                        </div>
+                        <button
+                          onClick={handleNewPage}
+                          className="inline-flex items-center gap-2 px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-medium"
+                        >
+                          <svg
+                            className="w-5 h-5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M12 4v16m8-8H4"
+                            />
+                          </svg>
+                          새 페이지 만들기
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </main>
               </div>
+
+              {collaborationConnected && currentPage && (
+                <div className="fixed bottom-4 right-4 z-40">
+                  <div className="bg-white border border-gray-200 rounded-lg shadow-lg px-4 py-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                      <span className="text-gray-600">
+                        {hasCollaborators
+                          ? `${onlineUsers.length}명과 함께 편집 중`
+                          : "실시간 협업 준비됨"}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </main>
-      </div>
-    </div>
+          }
+        />
+      </Routes>
+    </Router>
   );
 };
 
