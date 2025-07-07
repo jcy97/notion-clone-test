@@ -20,13 +20,15 @@ export const HeadingBlock: React.FC<Props> = ({
 }) => {
   const [isComposing, setIsComposing] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [level, setLevel] = useState<1 | 2 | 3>(block.level as 1 | 2 | 3);
+  const currentLevel =
+    (block as any).level || (block as any).metadata?.level || 1;
+  const [level, setLevel] = useState<1 | 2 | 3>(currentLevel as 1 | 2 | 3);
   const inputRef = useRef<HTMLDivElement>(null);
   const lastSavedContentRef = useRef(block.content);
-  const lastSavedLevelRef = useRef<1 | 2 | 3>(block.level as 1 | 2 | 3);
+  const lastSavedLevelRef = useRef<1 | 2 | 3>(currentLevel as 1 | 2 | 3);
 
   const initialContentRef = useRef(block.content);
-  const initialLevelRef = useRef<1 | 2 | 3>(block.level as 1 | 2 | 3);
+  const initialLevelRef = useRef<1 | 2 | 3>(currentLevel as 1 | 2 | 3);
 
   useEffect(() => {
     if (isSelected && inputRef.current) {
@@ -35,20 +37,27 @@ export const HeadingBlock: React.FC<Props> = ({
   }, [isSelected]);
 
   useEffect(() => {
+    const newLevel =
+      (block as any).level || (block as any).metadata?.level || 1;
     if (
       inputRef.current &&
       !isEditing &&
       (block.content !== lastSavedContentRef.current ||
-        block.level !== lastSavedLevelRef.current)
+        newLevel !== lastSavedLevelRef.current)
     ) {
       inputRef.current.textContent = block.content;
-      setLevel(block.level as 1 | 2 | 3);
+      setLevel(newLevel as 1 | 2 | 3);
       lastSavedContentRef.current = block.content;
-      lastSavedLevelRef.current = block.level as 1 | 2 | 3;
+      lastSavedLevelRef.current = newLevel as 1 | 2 | 3;
       initialContentRef.current = block.content;
-      initialLevelRef.current = block.level as 1 | 2 | 3;
+      initialLevelRef.current = newLevel as 1 | 2 | 3;
     }
-  }, [block.content, block.level, isEditing]);
+  }, [
+    block.content,
+    (block as any).level,
+    (block as any).metadata?.level,
+    isEditing,
+  ]);
 
   const saveContent = (content: string, newLevel?: 1 | 2 | 3) => {
     const levelToSave = newLevel !== undefined ? newLevel : level;

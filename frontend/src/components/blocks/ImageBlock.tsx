@@ -16,9 +16,16 @@ export const ImageBlock: React.FC<Props> = ({
   isSelected,
   onSelect,
 }) => {
-  const [caption, setCaption] = useState(block.caption || "");
-  const [isEditing, setIsEditing] = useState(!block.url);
-  const [imageUrl, setImageUrl] = useState(block.url);
+  const blockUrl = (block as any).url || (block as any).metadata?.url || "";
+  const blockCaption =
+    (block as any).caption ||
+    (block as any).metadata?.caption ||
+    block.content ||
+    "";
+
+  const [caption, setCaption] = useState(blockCaption);
+  const [isEditing, setIsEditing] = useState(!blockUrl);
+  const [imageUrl, setImageUrl] = useState(blockUrl);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

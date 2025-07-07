@@ -239,13 +239,12 @@ export const getBlockPreview = (
       );
 
     case "heading":
-      return `H${(block as HeadingBlock).level}: ${block.content.slice(
-        0,
-        maxLength
-      )}`;
+      const level = (block as any).level || (block as any).metadata?.level || 1;
+      return `H${level}: ${block.content.slice(0, maxLength)}`;
 
     case "image":
-      return `🖼️ ${(block as ImageBlock).caption || "이미지"}`;
+      const imageBlock = block as ImageBlock;
+      return `🖼️ ${imageBlock.caption || "이미지"}`;
 
     case "table":
       const tableBlock = block as TableBlock;
@@ -295,7 +294,8 @@ export const validateBlockData = (blockData: Partial<Block>): string[] => {
   }
 
   if (blockData.type === "heading") {
-    const level = (blockData as any).level;
+    const level =
+      (blockData as any).level || (blockData as any).metadata?.level;
     if (level && ![1, 2, 3].includes(level)) {
       errors.push("헤딩 레벨은 1, 2, 3 중 하나여야 합니다.");
     }
@@ -321,8 +321,8 @@ export const blockToMarkdown = (block: Block): string => {
       return block.content;
 
     case "heading":
-      const headingBlock = block as HeadingBlock;
-      return "#".repeat(headingBlock.level) + " " + block.content;
+      const level = (block as any).level || (block as any).metadata?.level || 1;
+      return "#".repeat(level) + " " + block.content;
 
     case "image":
       const imageBlock = block as ImageBlock;

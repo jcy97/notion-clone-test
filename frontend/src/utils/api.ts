@@ -30,10 +30,8 @@ api.interceptors.request.use(
   }
 );
 
-// 응답 인터셉터 - 자동 에러 처리
 api.interceptors.response.use(
   (response) => {
-    // MongoDB _id를 id로 변환하는 헬퍼 함수
     const convertMongoId = (obj: any): any => {
       if (Array.isArray(obj)) {
         return obj.map(convertMongoId);
@@ -42,7 +40,25 @@ api.interceptors.response.use(
         if (converted._id) {
           converted.id = converted._id;
         }
-        // 중첩된 객체들도 변환
+
+        if (converted.metadata) {
+          if (converted.metadata.level !== undefined) {
+            converted.level = converted.metadata.level;
+          }
+          if (converted.metadata.url !== undefined) {
+            converted.url = converted.metadata.url;
+          }
+          if (converted.metadata.caption !== undefined) {
+            converted.caption = converted.metadata.caption;
+          }
+          if (converted.metadata.headers !== undefined) {
+            converted.headers = converted.metadata.headers;
+          }
+          if (converted.metadata.rows !== undefined) {
+            converted.rows = converted.metadata.rows;
+          }
+        }
+
         Object.keys(converted).forEach((key) => {
           if (typeof converted[key] === "object" && converted[key] !== null) {
             converted[key] = convertMongoId(converted[key]);
@@ -53,7 +69,6 @@ api.interceptors.response.use(
       return obj;
     };
 
-    // 응답 데이터에서 _id를 id로 변환
     if (response.data) {
       response.data = convertMongoId(response.data);
     }
@@ -69,11 +84,9 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    // 토큰 만료 처리 - 로그인/회원가입 페이지가 아닐 때만 리디렉션
     if (error.response?.status === 401) {
       localStorage.removeItem("token");
 
-      // 현재 경로가 로그인/회원가입 페이지가 아닐 때만 리디렉션
       const currentPath = window.location.pathname;
       if (currentPath !== "/login" && currentPath !== "/register") {
         window.location.href = "/login";
