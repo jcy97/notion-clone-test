@@ -197,6 +197,7 @@ export const searchBlocks = (blocks: Block[], searchTerm: string): Block[] => {
 };
 
 // 블록 내용 요약 (미리보기용)
+// 블록 내용 요약 (미리보기용) - 수정된 버전
 export const getBlockPreview = (
   block: Block,
   maxLength: number = 100
@@ -222,10 +223,10 @@ export const getBlockPreview = (
       return `📊 테이블 (${tableBlock.rows.length}행 × ${tableBlock.headers.length}열)`;
 
     default:
-      return block.content.slice(0, maxLength);
+      // assertNever 함수를 사용하여 exhaustive check
+      return assertNever(block);
   }
 };
-
 // 블록 복제
 export const duplicateBlock = (block: Block): Block => {
   return {
@@ -298,7 +299,8 @@ export const blockToMarkdown = (block: Block): string => {
       return [headerRow, separatorRow, ...dataRows].join("\n");
 
     default:
-      return block.content;
+      // assertNever 함수를 사용하여 exhaustive check
+      return assertNever(block);
   }
 };
 

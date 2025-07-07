@@ -1,0 +1,48 @@
+import mongoose, { Document, Schema } from "mongoose";
+
+export interface IUser extends Document {
+  email: string;
+  password: string;
+  name: string;
+  avatar?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const UserSchema = new Schema<IUser>(
+  {
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+      minlength: 6,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    avatar: {
+      type: String,
+      default: null,
+    },
+  },
+  {
+    timestamps: true,
+  }
+);
+
+// 비밀번호를 JSON으로 변환할 때 제외
+UserSchema.methods.toJSON = function () {
+  const user = this.toObject();
+  delete user.password;
+  return user;
+};
+
+export const User = mongoose.model<IUser>("User", UserSchema);

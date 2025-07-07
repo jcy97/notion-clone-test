@@ -32,6 +32,8 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.16.1",
     "socket.io": "^4.8.1",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "yjs": "^13.6.0",
+    "y-protocols": "^1.0.0"
   }
 }
