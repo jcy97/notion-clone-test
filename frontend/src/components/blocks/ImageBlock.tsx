@@ -48,6 +48,10 @@ export const ImageBlock: React.FC<Props> = ({
     onUpdate(block.id, imageUrl, newCaption);
   };
 
+  const handleCaptionKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+  };
+
   return (
     <div
       className={`group relative py-2 px-3 rounded hover:bg-gray-50 ${
@@ -115,6 +119,7 @@ export const ImageBlock: React.FC<Props> = ({
             type="text"
             value={caption}
             onChange={(e) => handleCaptionChange(e.target.value)}
+            onKeyDown={handleCaptionKeyDown}
             placeholder="이미지 설명을 입력하세요..."
             className="w-full mt-2 px-2 py-1 text-sm text-gray-600 bg-transparent border-none outline-none placeholder-gray-400"
           />

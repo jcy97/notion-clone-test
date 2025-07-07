@@ -7,7 +7,6 @@ import {
   TableBlock,
 } from "../types/block.types";
 
-// 타입 가드 함수들
 export const isTextBlock = (block: Block): block is TextBlock =>
   block.type === "text";
 export const isHeadingBlock = (block: Block): block is HeadingBlock =>
@@ -17,12 +16,10 @@ export const isImageBlock = (block: Block): block is ImageBlock =>
 export const isTableBlock = (block: Block): block is TableBlock =>
   block.type === "table";
 
-// Exhaustive check를 위한 함수
 const assertNever = (x: never): never => {
   throw new Error(`Unexpected object: ${x}`);
 };
 
-// 블록 생성 유틸리티 - 단순화된 버전
 export const createBlock = (
   type: BlockType,
   content: string = "",
@@ -93,12 +90,10 @@ export const createBlock = (
   }
 };
 
-// 블록 타입 검증
 export const isValidBlockType = (type: string): type is BlockType => {
   return ["text", "heading", "image", "table"].includes(type);
 };
 
-// 블록 위치 재정렬
 export const reorderBlocks = (blocks: Block[]): Block[] => {
   return blocks
     .sort((a, b) => a.position - b.position)
@@ -108,7 +103,6 @@ export const reorderBlocks = (blocks: Block[]): Block[] => {
     }));
 };
 
-// 블록 이동 (드래그 앤 드롭용)
 export const moveBlock = (
   blocks: Block[],
   sourceIndex: number,
@@ -121,7 +115,6 @@ export const moveBlock = (
   return reorderBlocks(reorderedBlocks);
 };
 
-// 블록 삽입 (특정 위치에)
 export const insertBlockAtPosition = (
   blocks: Block[],
   newBlock: Block,
@@ -142,13 +135,11 @@ export const insertBlockAtPosition = (
   return reorderBlocks(newBlocks);
 };
 
-// 블록 삭제
 export const removeBlock = (blocks: Block[], blockId: string): Block[] => {
   const filteredBlocks = blocks.filter((block) => block.id !== blockId);
   return reorderBlocks(filteredBlocks);
 };
 
-// 블록 업데이트 - 안전한 타입 처리 및 테이블 데이터 일관성 보장
 export const updateBlock = (
   blocks: Block[],
   blockId: string,
@@ -163,11 +154,26 @@ export const updateBlock = (
       updatedAt: new Date(),
     } as Block;
 
-    // 테이블 블록의 경우 데이터 일관성 보장
+    if (block.type === "heading") {
+      const headingBlock = updatedBlock as HeadingBlock;
+      if (updates.level !== undefined) {
+        headingBlock.level = updates.level as 1 | 2 | 3;
+      }
+    }
+
+    if (block.type === "image") {
+      const imageBlock = updatedBlock as ImageBlock;
+      if (updates.url !== undefined) {
+        imageBlock.url = updates.url;
+      }
+      if (updates.caption !== undefined) {
+        imageBlock.caption = updates.caption;
+      }
+    }
+
     if (block.type === "table") {
       const tableBlock = updatedBlock as TableBlock;
 
-      // content가 업데이트된 경우 headers와 rows도 동기화
       if (updates.content && typeof updates.content === "string") {
         try {
           const tableData = JSON.parse(updates.content);
@@ -178,7 +184,6 @@ export const updateBlock = (
         }
       }
 
-      // headers 또는 rows가 직접 업데이트된 경우 content도 동기화
       if (updates.headers || updates.rows) {
         const headers = updates.headers || (tableBlock as any).headers || [];
         const rows = updates.rows || (tableBlock as any).rows || [[]];
@@ -192,7 +197,6 @@ export const updateBlock = (
   });
 };
 
-// 블록 검색
 export const searchBlocks = (blocks: Block[], searchTerm: string): Block[] => {
   if (!searchTerm.trim()) return blocks;
 
@@ -223,7 +227,6 @@ export const searchBlocks = (blocks: Block[], searchTerm: string): Block[] => {
   });
 };
 
-// 블록 내용 요약 (미리보기용)
 export const getBlockPreview = (
   block: Block,
   maxLength: number = 100
@@ -247,12 +250,10 @@ export const getBlockPreview = (
     case "table":
       const tableBlock = block as TableBlock;
 
-      // tableBlock.rows가 직접 있는 경우 (생성 직후)
       if (tableBlock.rows && tableBlock.headers) {
         return `📊 테이블 (${tableBlock.rows.length}행 × ${tableBlock.headers.length}열)`;
       }
 
-      // content에서 파싱해야 하는 경우 (업데이트 후)
       try {
         const tableData = JSON.parse(
           tableBlock.content || '{"headers":["열1","열2"],"rows":[["",""]]}'
@@ -266,11 +267,10 @@ export const getBlockPreview = (
       }
 
     default:
-      // assertNever 함수를 사용하여 exhaustive check
       return assertNever(block);
   }
 };
-// 블록 복제
+
 export const duplicateBlock = (block: Block): Block => {
   return {
     ...block,
@@ -281,7 +281,6 @@ export const duplicateBlock = (block: Block): Block => {
   };
 };
 
-// 블록 데이터 검증
 export const validateBlockData = (blockData: Partial<Block>): string[] => {
   const errors: string[] = [];
 
@@ -316,7 +315,6 @@ export const validateBlockData = (blockData: Partial<Block>): string[] => {
   return errors;
 };
 
-// 블록을 마크다운으로 변환
 export const blockToMarkdown = (block: Block): string => {
   switch (block.type) {
     case "text":
@@ -342,12 +340,10 @@ export const blockToMarkdown = (block: Block): string => {
       return [headerRow, separatorRow, ...dataRows].join("\n");
 
     default:
-      // assertNever 함수를 사용하여 exhaustive check
       return assertNever(block);
   }
 };
 
-// 페이지의 모든 블록을 마크다운으로 변환
 export const blocksToMarkdown = (
   blocks: Block[],
   pageTitle: string = ""
@@ -364,7 +360,6 @@ export const blocksToMarkdown = (
   return content;
 };
 
-// 키보드 단축키 처리
 export const handleBlockKeyboard = (
   e: KeyboardEvent,
   blockId: string,
@@ -375,19 +370,16 @@ export const handleBlockKeyboard = (
 ) => {
   const isCmd = e.metaKey || e.ctrlKey;
 
-  // Enter: 새 블록 생성
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     onCreateBlock(blockId);
   }
 
-  // Backspace: 빈 블록 삭제
   if (e.key === "Backspace" && (e.target as HTMLElement).textContent === "") {
     e.preventDefault();
     onDeleteBlock(blockId);
   }
 
-  // Cmd/Ctrl + 화살표: 블록 이동
   if (isCmd && e.key === "ArrowUp") {
     e.preventDefault();
     onMoveUp(blockId);

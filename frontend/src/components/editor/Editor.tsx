@@ -15,7 +15,6 @@ import {
   insertBlockAtPosition,
   removeBlock,
   updateBlock as updateBlockUtil,
-  handleBlockKeyboard,
   getBlockPreview,
 } from "../../utils/blockUtils";
 
@@ -37,7 +36,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
   const socket = useWebSocket(page.id);
 
-  // YJS 실시간 협업 훅 사용
   const {
     isConnected,
     updateBlock: updateYBlock,
@@ -48,7 +46,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   } = useYDoc({
     pageId: page.id,
     onUpdate: (content) => {
-      // YJS 문서 업데이트 시 로컬 상태 동기화
       if (content.blocks) {
         const yBlocks = Object.values(content.blocks);
         setBlocks(reorderBlocks(yBlocks as Block[]));
@@ -61,7 +58,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     setPageTitle(page.title);
   }, [page]);
 
-  // 빈 페이지 처리 - useEffect로 이동
   useEffect(() => {
     const createFirstBlock = async () => {
       if (blocks && blocks.length === 0) {
@@ -100,7 +96,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         setBlocks((prev) => removeBlock(prev, deletedBlockId));
       });
 
-      // 실시간 사용자 활동 표시
       socket.on(
         "user-typing",
         (data: { userId: string; userName: string; blockId: string }) => {
@@ -118,7 +113,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           blockId: string;
           position: number;
         }) => {
-          // 다른 사용자의 커서 위치 표시 로직
           console.log(`${data.userName}의 커서 위치:`, data);
         }
       );
@@ -135,7 +129,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     };
   }, [socket]);
 
-  // 페이지 제목 업데이트
   const handleTitleUpdate = useCallback(
     async (newTitle: string) => {
       setPageTitle(newTitle);
@@ -150,29 +143,26 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [page, onPageUpdate]
   );
 
-  // 블록 업데이트
   const updateBlock = useCallback(
     async (blockId: string, content: string, extra?: any) => {
       try {
-        const response = await api.put(`/pages/${page.id}/blocks/${blockId}`, {
-          content,
-          ...extra,
-        });
+        const updateData = { content, ...extra };
+        const response = await api.put(
+          `/pages/${page.id}/blocks/${blockId}`,
+          updateData
+        );
 
         const updatedBlock = response.data.block;
 
         setBlocks((prev) =>
           updateBlockUtil(prev, blockId, {
-            content,
-            ...extra,
+            ...updateData,
             updatedAt: new Date(),
           })
         );
 
-        // YJS 동기화
         updateYBlock(blockId, updatedBlock);
 
-        // Socket.io 브로드캐스트
         if (socket) {
           socket.emit("block-update", updatedBlock);
         }
@@ -183,23 +173,20 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [page.id, socket, updateYBlock]
   );
 
-  // 새 블록 생성
   const createNewBlock = useCallback(
-    async (type: BlockType, afterBlockId?: string) => {
+    async (type: BlockType = "text", afterBlockId?: string) => {
       try {
         const afterBlock = afterBlockId
           ? blocks.find((b) => b.id === afterBlockId)
           : null;
         const position = afterBlock ? afterBlock.position + 1 : blocks.length;
 
-        // 로컬에서 임시 블록 생성
         const tempBlock = createBlock(type, "", position, page.id);
         setBlocks((prev) =>
           insertBlockAtPosition(prev, tempBlock, afterBlockId)
         );
         setSelectedBlockId(tempBlock.id);
 
-        // 서버에 실제 블록 생성 요청
         const response = await api.post(`/pages/${page.id}/blocks`, {
           type,
           content: "",
@@ -208,14 +195,11 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
         const newBlock = response.data.block;
 
-        // 실제 서버 응답으로 교체
         setBlocks((prev) => updateBlockUtil(prev, tempBlock.id, newBlock));
         setSelectedBlockId(newBlock.id);
 
-        // YJS 동기화
         addYBlock(newBlock.id, newBlock, position);
 
-        // Socket.io 브로드캐스트
         if (socket) {
           socket.emit("block-create", newBlock);
         }
@@ -228,7 +212,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [page.id, blocks, socket, addYBlock]
   );
 
-  // 블록 삭제
   const deleteBlock = useCallback(
     async (blockId: string) => {
       try {
@@ -236,15 +219,12 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
         setBlocks((prev) => removeBlock(prev, blockId));
 
-        // YJS 동기화
         deleteYBlock(blockId);
 
-        // Socket.io 브로드캐스트
         if (socket) {
           socket.emit("block-delete", blockId);
         }
 
-        // 이전 블록으로 포커스 이동
         const blockIndex = blocks.findIndex((b) => b.id === blockId);
         if (blockIndex > 0) {
           setSelectedBlockId(blocks[blockIndex - 1].id);
@@ -258,26 +238,22 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [page.id, blocks, socket, deleteYBlock]
   );
 
-  // 새 블록 추가 트리거
-  const handleNewBlock = useCallback((afterBlockId: string) => {
-    setPendingBlockId(afterBlockId);
+  const handleNewBlock = useCallback(
+    (afterBlockId: string) => {
+      createNewBlock("text", afterBlockId);
+    },
+    [createNewBlock]
+  );
 
-    // 블록 선택기 위치 계산
-    const afterBlock = document.querySelector(
-      `[data-block-id="${afterBlockId}"]`
-    );
-    if (afterBlock) {
-      const rect = afterBlock.getBoundingClientRect();
-      setBlockSelectorPosition({
-        x: rect.left,
-        y: rect.bottom + 5,
-      });
-    }
+  const handleShowBlockSelector = useCallback(
+    (afterBlockId: string, position: { x: number; y: number }) => {
+      setPendingBlockId(afterBlockId);
+      setBlockSelectorPosition(position);
+      setShowBlockSelector(true);
+    },
+    []
+  );
 
-    setShowBlockSelector(true);
-  }, []);
-
-  // 블록 타입 선택 처리
   const handleBlockSelect = useCallback(
     (type: BlockType) => {
       createNewBlock(type, pendingBlockId || undefined);
@@ -287,7 +263,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [createNewBlock, pendingBlockId]
   );
 
-  // 커서 위치 추적 (실시간 협업용)
   const handleCursorChange = useCallback(
     (blockId: string, position: number) => {
       setUserCursor(blockId, position);
@@ -295,55 +270,27 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     [setUserCursor]
   );
 
-  // 키보드 이벤트 처리
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      // / 키로 블록 선택기 열기
       if (e.key === "/") {
         e.preventDefault();
         const selection = window.getSelection();
         if (selection && selection.rangeCount > 0) {
           const range = selection.getRangeAt(0);
           const rect = range.getBoundingClientRect();
-          setBlockSelectorPosition({
+          handleShowBlockSelector("", {
             x: rect.left,
             y: rect.bottom + 5,
           });
-          setShowBlockSelector(true);
         }
       }
 
-      // Escape로 블록 선택기 닫기
       if (e.key === "Escape") {
         setShowBlockSelector(false);
         setPendingBlockId(null);
       }
-
-      // 선택된 블록이 있을 때 키보드 단축키 처리
-      if (selectedBlockId) {
-        handleBlockKeyboard(
-          e,
-          selectedBlockId,
-          handleNewBlock,
-          deleteBlock,
-          (id) => {
-            // 블록 위로 이동 로직
-            const currentIndex = blocks.findIndex((b) => b.id === id);
-            if (currentIndex > 0) {
-              setSelectedBlockId(blocks[currentIndex - 1].id);
-            }
-          },
-          (id) => {
-            // 블록 아래로 이동 로직
-            const currentIndex = blocks.findIndex((b) => b.id === id);
-            if (currentIndex < blocks.length - 1) {
-              setSelectedBlockId(blocks[currentIndex + 1].id);
-            }
-          }
-        );
-      }
     },
-    [selectedBlockId, blocks, handleNewBlock, deleteBlock]
+    [handleShowBlockSelector]
   );
 
   useEffect(() => {
@@ -353,7 +300,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     };
   }, [handleKeyDown]);
 
-  // 블록 렌더링
   const renderBlock = (block: Block) => {
     const baseProps = {
       key: block.id,
@@ -419,7 +365,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">
-      {/* 연결 상태 표시 */}
       <div className="mb-4 flex items-center justify-between">
         <div className="text-sm text-gray-500">
           {isConnected ? (
@@ -435,14 +380,12 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           )}
         </div>
 
-        {/* 페이지 정보 */}
         <div className="text-sm text-gray-500">
           {blocks.length}개 블록 • 마지막 수정:{" "}
           {new Date(page.updatedAt).toLocaleString()}
         </div>
       </div>
 
-      {/* 페이지 제목 */}
       <input
         type="text"
         value={pageTitle}
@@ -457,13 +400,20 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         placeholder="제목 없음"
       />
 
-      {/* 블록들 */}
       <div className="space-y-1">
         {reorderBlocks(blocks).map(renderBlock)}
 
-        {/* 새 블록 추가 버튼 */}
         <button
-          onClick={() => handleNewBlock(blocks[blocks.length - 1]?.id || "")}
+          onClick={() => {
+            const lastBlockId = blocks[blocks.length - 1]?.id || "";
+            const rect = document
+              .querySelector(`[data-block-id="${lastBlockId}"]`)
+              ?.getBoundingClientRect();
+            handleShowBlockSelector(lastBlockId, {
+              x: rect?.left || 0,
+              y: (rect?.bottom || 0) + 5,
+            });
+          }}
           className="w-full py-4 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded transition-colors flex items-center justify-center gap-2"
         >
           <span className="text-xl">+</span>새 블록 추가하려면 클릭하거나 '/'를
@@ -471,7 +421,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         </button>
       </div>
 
-      {/* 블록 선택기 */}
       {showBlockSelector && (
         <>
           <div
@@ -486,7 +435,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         </>
       )}
 
-      {/* 페이지 요약 정보 (디버깅용) */}
       {process.env.NODE_ENV === "development" && (
         <div className="mt-8 p-4 bg-gray-100 rounded-lg text-sm">
           <h4 className="font-semibold mb-2">개발 정보:</h4>

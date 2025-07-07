@@ -54,6 +54,10 @@ export const TableBlock: React.FC<Props> = ({
     updateTable(newHeaders, rows);
   };
 
+  const handleInputKeyDown = (e: React.KeyboardEvent) => {
+    e.stopPropagation();
+  };
+
   return (
     <div
       className={`group relative py-2 px-3 rounded hover:bg-gray-50 ${
@@ -74,6 +78,7 @@ export const TableBlock: React.FC<Props> = ({
                     type="text"
                     value={header}
                     onChange={(e) => updateHeader(index, e.target.value)}
+                    onKeyDown={handleInputKeyDown}
                     className="w-full bg-transparent outline-none font-semibold text-center"
                   />
                 </th>
@@ -91,6 +96,7 @@ export const TableBlock: React.FC<Props> = ({
                       onChange={(e) =>
                         updateCell(rowIndex, colIndex, e.target.value)
                       }
+                      onKeyDown={handleInputKeyDown}
                       className="w-full bg-transparent outline-none"
                     />
                   </td>
