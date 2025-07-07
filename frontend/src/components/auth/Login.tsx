@@ -19,9 +19,11 @@ export const Login: React.FC = () => {
 
     try {
       await login(formData);
+      // 성공 시에만 리디렉션
+      window.location.href = "/";
     } catch (error: any) {
+      // 실패 시에는 에러 표시만 하고 리디렉션 안함
       setError(error.response?.data?.message || "로그인에 실패했습니다.");
-    } finally {
       setLoading(false);
     }
   };

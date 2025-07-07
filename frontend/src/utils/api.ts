@@ -4,10 +4,9 @@ const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:3001";
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000, // 10초 타임아웃
+  timeout: 10000,
 });
 
-// 요청 인터셉터 - 토큰 자동 추가
 api.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem("token");
@@ -15,7 +14,6 @@ api.interceptors.request.use(
       config.headers.Authorization = `Bearer ${token}`;
     }
 
-    // 개발 환경에서 요청 로깅
     if (process.env.NODE_ENV === "development") {
       console.log("🚀 API Request:", {
         method: config.method?.toUpperCase(),
@@ -35,7 +33,31 @@ api.interceptors.request.use(
 // 응답 인터셉터 - 자동 에러 처리
 api.interceptors.response.use(
   (response) => {
-    // 개발 환경에서 응답 로깅
+    // MongoDB _id를 id로 변환하는 헬퍼 함수
+    const convertMongoId = (obj: any): any => {
+      if (Array.isArray(obj)) {
+        return obj.map(convertMongoId);
+      } else if (obj && typeof obj === "object") {
+        const converted = { ...obj };
+        if (converted._id) {
+          converted.id = converted._id;
+        }
+        // 중첩된 객체들도 변환
+        Object.keys(converted).forEach((key) => {
+          if (typeof converted[key] === "object" && converted[key] !== null) {
+            converted[key] = convertMongoId(converted[key]);
+          }
+        });
+        return converted;
+      }
+      return obj;
+    };
+
+    // 응답 데이터에서 _id를 id로 변환
+    if (response.data) {
+      response.data = convertMongoId(response.data);
+    }
+
     if (process.env.NODE_ENV === "development") {
       console.log("✅ API Response:", {
         status: response.status,
@@ -47,23 +69,25 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    // 토큰 만료 처리
+    // 토큰 만료 처리 - 로그인/회원가입 페이지가 아닐 때만 리디렉션
     if (error.response?.status === 401) {
       localStorage.removeItem("token");
-      window.location.href = "/login";
+
+      // 현재 경로가 로그인/회원가입 페이지가 아닐 때만 리디렉션
+      const currentPath = window.location.pathname;
+      if (currentPath !== "/login" && currentPath !== "/register") {
+        window.location.href = "/login";
+      }
+
       return Promise.reject(error);
     }
 
-    // 네트워크 에러 처리
     if (!error.response) {
       console.error("❌ Network Error: 서버에 연결할 수 없습니다.");
-      // 사용자에게 알림 (토스트 등)
     }
 
-    // 서버 에러 처리
     if (error.response?.status >= 500) {
       console.error("❌ Server Error:", error.response.data);
-      // 사용자에게 알림
     }
 
     console.error("❌ API Error:", {
@@ -76,9 +100,7 @@ api.interceptors.response.use(
   }
 );
 
-// API 헬퍼 함수들
 export const apiHelpers = {
-  // 페이지 관련
   pages: {
     getAll: () => api.get("/pages"),
     getById: (id: string) => api.get(`/pages/${id}`),
@@ -88,7 +110,6 @@ export const apiHelpers = {
     share: (id: string) => api.post(`/pages/${id}/share`),
   },
 
-  // 블록 관련
   blocks: {
     create: (pageId: string, data: any) =>
       api.post(`/pages/${pageId}/blocks`, data),
@@ -98,7 +119,6 @@ export const apiHelpers = {
       api.delete(`/pages/${pageId}/blocks/${blockId}`),
   },
 
-  // 인증 관련
   auth: {
     login: (data: any) => api.post("/auth/login", data),
     register: (data: any) => api.post("/auth/register", data),

@@ -25,7 +25,7 @@ interface Props {
 }
 
 export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
-  const [blocks, setBlocks] = useState<Block[]>(page.blocks);
+  const [blocks, setBlocks] = useState<Block[]>(page.blocks || []);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [showBlockSelector, setShowBlockSelector] = useState(false);
   const [blockSelectorPosition, setBlockSelectorPosition] = useState({
@@ -57,9 +57,32 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   });
 
   useEffect(() => {
-    setBlocks(reorderBlocks(page.blocks));
+    setBlocks(reorderBlocks(page.blocks || []));
     setPageTitle(page.title);
   }, [page]);
+
+  // 빈 페이지 처리 - useEffect로 이동
+  useEffect(() => {
+    const createFirstBlock = async () => {
+      if (blocks && blocks.length === 0) {
+        try {
+          const response = await api.post(`/pages/${page.id}/blocks`, {
+            type: "text",
+            content: "",
+            position: 0,
+          });
+
+          const newBlock = response.data.block;
+          setBlocks([newBlock]);
+          setSelectedBlockId(newBlock.id);
+        } catch (error) {
+          console.error("첫 블록 생성 실패:", error);
+        }
+      }
+    };
+
+    createFirstBlock();
+  }, [blocks?.length, page.id]);
 
   useEffect(() => {
     if (socket) {
@@ -128,7 +151,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   );
 
   // 블록 업데이트
-  // updateBlock 호출 시 정확한 타입 전달
   const updateBlock = useCallback(
     async (blockId: string, content: string, extra?: any) => {
       try {
@@ -139,7 +161,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
 
         const updatedBlock = response.data.block;
 
-        // blockUtils의 updateBlock 사용 시 올바른 타입 전달
         setBlocks((prev) =>
           updateBlockUtil(prev, blockId, {
             content,
@@ -161,6 +182,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     },
     [page.id, socket, updateYBlock]
   );
+
   // 새 블록 생성
   const createNewBlock = useCallback(
     async (type: BlockType, afterBlockId?: string) => {
@@ -170,7 +192,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           : null;
         const position = afterBlock ? afterBlock.position + 1 : blocks.length;
 
-        // 로컬에서 임시 블록 생성 (타입 안전성 보장)
+        // 로컬에서 임시 블록 생성
         const tempBlock = createBlock(type, "", position, page.id);
         setBlocks((prev) =>
           insertBlockAtPosition(prev, tempBlock, afterBlockId)
@@ -201,11 +223,11 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         return newBlock;
       } catch (error) {
         console.error("블록 생성 실패:", error);
-        // 에러 시 임시 블록 제거 (tempBlock이 정의된 경우에만)
       }
     },
     [page.id, blocks, socket, addYBlock]
   );
+
   // 블록 삭제
   const deleteBlock = useCallback(
     async (blockId: string) => {
@@ -394,11 +416,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         return null;
     }
   };
-
-  // 빈 페이지 처리
-  if (blocks.length === 0) {
-    createNewBlock("text");
-  }
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">

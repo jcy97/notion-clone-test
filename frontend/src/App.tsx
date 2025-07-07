@@ -19,6 +19,7 @@ const App: React.FC = () => {
   const [pages, setPages] = useState<Page[]>([]);
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
   const [pagesLoading, setPagesLoading] = useState(false);
+  const [initialPageSelected, setInitialPageSelected] = useState(false);
 
   useEffect(() => {
     if (user) {
@@ -28,16 +29,22 @@ const App: React.FC = () => {
 
   const fetchPages = async () => {
     setPagesLoading(true);
+    setInitialPageSelected(false);
+
     try {
       const response = await api.get("/pages");
       setPages(response.data.pages);
 
-      // 첫 번째 페이지를 자동으로 선택
+      // 첫 번째 페이지를 자동으로 선택하되, 완전한 페이지 정보를 가져옴
       if (response.data.pages.length > 0 && !currentPage) {
-        setCurrentPage(response.data.pages[0]);
+        const firstPageId = response.data.pages[0].id;
+        await handlePageSelect(firstPageId);
+      } else {
+        setInitialPageSelected(true);
       }
     } catch (error) {
       console.error("페이지 목록 불러오기 실패:", error);
+      setInitialPageSelected(true);
     } finally {
       setPagesLoading(false);
     }
@@ -51,8 +58,14 @@ const App: React.FC = () => {
       });
 
       const newPage = response.data.page;
-      setPages((prev) => [newPage, ...prev]);
-      setCurrentPage(newPage);
+
+      // 새 페이지의 완전한 정보를 가져오기
+      const fullPageResponse = await api.get(`/pages/${newPage.id}`);
+      const fullNewPage = fullPageResponse.data.page;
+
+      setPages((prev) => [fullNewPage, ...prev]);
+      setCurrentPage(fullNewPage);
+      setInitialPageSelected(true);
     } catch (error) {
       console.error("페이지 생성 실패:", error);
     }
@@ -61,7 +74,12 @@ const App: React.FC = () => {
   const handlePageSelect = async (pageId: string) => {
     try {
       const response = await api.get(`/pages/${pageId}`);
-      setCurrentPage(response.data.page);
+      const fullPage = response.data.page;
+
+      console.log("Selected page:", fullPage); // 디버깅용
+
+      setCurrentPage(fullPage);
+      setInitialPageSelected(true);
     } catch (error) {
       console.error("페이지 불러오기 실패:", error);
     }
@@ -90,7 +108,6 @@ const App: React.FC = () => {
       const response = await api.post(`/pages/${currentPage.id}/share`);
       const shareUrl = response.data.shareUrl;
 
-      // 클립보드에 복사
       await navigator.clipboard.writeText(shareUrl);
       alert("공유 링크가 클립보드에 복사되었습니다!");
     } catch (error) {
@@ -137,11 +154,11 @@ const App: React.FC = () => {
         />
 
         <main className="flex-1 overflow-auto">
-          {pagesLoading ? (
+          {pagesLoading || !initialPageSelected ? (
             <div className="flex items-center justify-center h-full">
               <div className="text-lg text-gray-500">페이지 로딩 중...</div>
             </div>
-          ) : currentPage ? (
+          ) : currentPage && currentPage.id ? (
             <Editor page={currentPage} onPageUpdate={handlePageUpdate} />
           ) : (
             <div className="flex items-center justify-center h-full">

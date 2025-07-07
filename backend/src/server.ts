@@ -5,6 +5,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import { connectDatabase } from "./utils/database";
 import { setupCollaborationSocket } from "./sockets/collaborationSocket";
+import { YSocketIO } from "y-socket.io/dist/server";
 
 // 라우트 임포트
 import authRoutes from "./routes/auth";
@@ -20,6 +21,9 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+
+const ysocketio = new YSocketIO(io);
+ysocketio.initialize();
 
 const PORT = process.env.PORT || 3001;
 
