@@ -39,11 +39,13 @@ export const TextBlock: React.FC<Props> = ({
 }) => {
   const [isComposing, setIsComposing] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [isUserTyping, setIsUserTyping] = useState(false);
   const editorRef = useRef<HTMLDivElement>(null);
   const isUpdatingFromYjs = useRef(false);
   const isUpdatingToYjs = useRef(false);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const cursorUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSyncedContent = useRef("");
 
   const colors = [
     "#FF6B6B",
@@ -62,52 +64,90 @@ export const TextBlock: React.FC<Props> = ({
     return colors[Math.abs(hash) % colors.length];
   }, []);
 
-  const syncWithYText = useCallback(() => {
-    if (!ytext || !editorRef.current || isUpdatingToYjs.current) return;
+  const preserveCursorPosition = useCallback(
+    (callback: () => void) => {
+      if (!editorRef.current) return callback();
 
-    isUpdatingFromYjs.current = true;
-    const ytextContent = ytext.toString();
-
-    if (editorRef.current.textContent !== ytextContent) {
       const selection = window.getSelection();
       let startOffset = 0;
+      let endOffset = 0;
 
-      if (selection && selection.rangeCount > 0) {
+      if (selection && selection.rangeCount > 0 && isSelected) {
         const range = selection.getRangeAt(0);
         startOffset = range.startOffset;
+        endOffset = range.endOffset;
       }
 
-      editorRef.current.textContent = ytextContent;
+      callback();
+
+      if (selection && isSelected && editorRef.current.firstChild) {
+        try {
+          const textNode = editorRef.current.firstChild as Text;
+          const newRange = document.createRange();
+          const textLength = textNode.textContent?.length || 0;
+
+          newRange.setStart(textNode, Math.min(startOffset, textLength));
+          newRange.setEnd(textNode, Math.min(endOffset, textLength));
+
+          selection.removeAllRanges();
+          selection.addRange(newRange);
+        } catch (error) {
+          // 커서 복원 실패시 무시
+        }
+      }
+    },
+    [isSelected]
+  );
+
+  const syncWithYText = useCallback(() => {
+    if (
+      !ytext ||
+      !editorRef.current ||
+      isUpdatingToYjs.current ||
+      isUserTyping ||
+      isComposing
+    ) {
+      return;
+    }
+
+    const ytextContent = ytext.toString();
+    const currentContent = editorRef.current.textContent || "";
+
+    if (
+      currentContent !== ytextContent &&
+      lastSyncedContent.current !== ytextContent
+    ) {
+      isUpdatingFromYjs.current = true;
+      lastSyncedContent.current = ytextContent;
+
+      preserveCursorPosition(() => {
+        if (editorRef.current) {
+          editorRef.current.textContent = ytextContent;
+        }
+      });
 
       if (onYTextChange) {
         onYTextChange(block.id, ytextContent);
       }
 
-      if (isSelected && selection && selection.rangeCount > 0) {
-        const newRange = document.createRange();
-        const textNode = editorRef.current.firstChild;
-        if (textNode) {
-          newRange.setStart(
-            textNode,
-            Math.min(startOffset, ytextContent.length)
-          );
-          newRange.collapse(true);
-          selection.removeAllRanges();
-          selection.addRange(newRange);
-        }
-      }
+      setTimeout(() => {
+        isUpdatingFromYjs.current = false;
+      }, 0);
     }
-
-    setTimeout(() => {
-      isUpdatingFromYjs.current = false;
-    }, 0);
-  }, [ytext, isSelected, onYTextChange, block.id]);
+  }, [
+    ytext,
+    onYTextChange,
+    block.id,
+    isUserTyping,
+    isComposing,
+    preserveCursorPosition,
+  ]);
 
   useEffect(() => {
     if (!ytext) return;
 
     const handleYTextChange = () => {
-      if (!isUpdatingToYjs.current) {
+      if (!isUpdatingToYjs.current && !isUserTyping && !isComposing) {
         syncWithYText();
       }
     };
@@ -116,9 +156,10 @@ export const TextBlock: React.FC<Props> = ({
 
     if (
       editorRef.current &&
-      (!editorRef.current.textContent ||
-        editorRef.current.textContent !== ytext.toString()) &&
-      ytext.length > 0
+      ytext.length > 0 &&
+      !isUserTyping &&
+      !isComposing &&
+      !isUpdatingToYjs.current
     ) {
       syncWithYText();
     }
@@ -126,7 +167,7 @@ export const TextBlock: React.FC<Props> = ({
     return () => {
       ytext.unobserve(handleYTextChange);
     };
-  }, [ytext, syncWithYText]);
+  }, [ytext, syncWithYText, isUserTyping, isComposing]);
 
   const updateCursorPosition = useCallback(() => {
     if (!isSelected || !onCursorMove || !editorRef.current) return;
@@ -153,6 +194,9 @@ export const TextBlock: React.FC<Props> = ({
       const target = e.target as HTMLDivElement;
       const newContent = target.textContent || "";
 
+      setIsUserTyping(true);
+      lastSyncedContent.current = newContent;
+
       onUpdate(block.id, newContent);
 
       if (ytext && !isUpdatingToYjs.current) {
@@ -176,11 +220,12 @@ export const TextBlock: React.FC<Props> = ({
       }
 
       typingTimeoutRef.current = setTimeout(() => {
+        setIsUserTyping(false);
         if (onTypingStop) {
           setIsTyping(false);
           onTypingStop(block.id);
         }
-      }, 1000);
+      }, 1500);
 
       setTimeout(() => {
         updateCursorPosition();
@@ -205,6 +250,7 @@ export const TextBlock: React.FC<Props> = ({
 
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
+        setIsUserTyping(false);
         if (onTypingStop && isTyping) {
           onTypingStop(block.id);
           setIsTyping(false);
@@ -214,6 +260,7 @@ export const TextBlock: React.FC<Props> = ({
 
       if (e.key === "Backspace" && currentContent === "") {
         e.preventDefault();
+        setIsUserTyping(false);
         if (onTypingStop && isTyping) {
           onTypingStop(block.id);
           setIsTyping(false);
@@ -247,6 +294,7 @@ export const TextBlock: React.FC<Props> = ({
   }, [onSelect, updateCursorPosition]);
 
   const handleBlur = useCallback(() => {
+    setIsUserTyping(false);
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
@@ -255,6 +303,20 @@ export const TextBlock: React.FC<Props> = ({
       setIsTyping(false);
     }
   }, [onTypingStop, isTyping, block.id]);
+
+  const handleCompositionStart = useCallback(() => {
+    setIsComposing(true);
+    setIsUserTyping(true);
+  }, []);
+
+  const handleCompositionEnd = useCallback(() => {
+    setIsComposing(false);
+    setTimeout(() => {
+      if (!isTyping) {
+        setIsUserTyping(false);
+      }
+    }, 100);
+  }, [isTyping]);
 
   useEffect(() => {
     document.addEventListener("selectionchange", handleSelectionChange);
@@ -277,12 +339,15 @@ export const TextBlock: React.FC<Props> = ({
   useEffect(() => {
     if (
       !isUpdatingFromYjs.current &&
+      !isUserTyping &&
+      !isComposing &&
       editorRef.current &&
       block.content !== editorRef.current.textContent
     ) {
+      lastSyncedContent.current = block.content;
       editorRef.current.textContent = block.content;
     }
-  }, [block.content]);
+  }, [block.content, isUserTyping, isComposing]);
 
   const blockTypingUsers = Array.from(typingUsers.values()).filter(
     (user) => user.blockId === block.id
@@ -306,8 +371,8 @@ export const TextBlock: React.FC<Props> = ({
           suppressContentEditableWarning
           onInput={handleInput}
           onKeyDown={handleKeyDown}
-          onCompositionStart={() => setIsComposing(true)}
-          onCompositionEnd={() => setIsComposing(false)}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           onFocus={handleFocus}
           onBlur={handleBlur}
           className="outline-none min-h-[1.5rem] text-gray-900 placeholder-gray-400 relative"

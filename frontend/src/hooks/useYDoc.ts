@@ -53,22 +53,61 @@ export const useYDoc = ({
     if (!blocksMapRef.current) return;
 
     const blocks = Array.from(blocksMapRef.current.entries()).map(
-      ([id, data]) => ({
-        id,
-        ...(data as Record<string, any>),
-      })
+      ([id, data]) => {
+        const blockData = data as Record<string, any>;
+
+        const block: any = {
+          id,
+          ...blockData,
+        };
+
+        if (blockData.metadata) {
+          if (blockData.metadata.level !== undefined) {
+            block.level = blockData.metadata.level;
+          }
+          if (blockData.metadata.url !== undefined) {
+            block.url = blockData.metadata.url;
+          }
+          if (blockData.metadata.caption !== undefined) {
+            block.caption = blockData.metadata.caption;
+          }
+          if (blockData.metadata.headers !== undefined) {
+            block.headers = blockData.metadata.headers;
+          }
+          if (blockData.metadata.rows !== undefined) {
+            block.rows = blockData.metadata.rows;
+          }
+        }
+
+        if (block.type === "table" && block.content) {
+          try {
+            const tableData = JSON.parse(block.content);
+            if (tableData.headers) block.headers = tableData.headers;
+            if (tableData.rows) block.rows = tableData.rows;
+          } catch (error) {
+            console.error("테이블 데이터 파싱 오류:", error);
+          }
+        }
+
+        return block;
+      }
     );
 
     const sortedBlocks = blocks.sort(
       (a: any, b: any) => (a.position || 0) - (b.position || 0)
     );
 
-    // 블록이 실제로 변경되었는지 확인
     const currentBlocksStr = JSON.stringify(
       sortedBlocks.map((b: any) => ({
         id: b.id,
         content: b.content,
         position: b.position,
+        level: b.level,
+        url: b.url,
+        caption: b.caption,
+        headers: b.headers,
+        rows: b.rows,
+        type: b.type,
       }))
     );
     const lastBlocksStr = JSON.stringify(
@@ -76,6 +115,12 @@ export const useYDoc = ({
         id: b.id,
         content: b.content,
         position: b.position,
+        level: b.level,
+        url: b.url,
+        caption: b.caption,
+        headers: b.headers,
+        rows: b.rows,
+        type: b.type,
       }))
     );
 
@@ -83,11 +128,6 @@ export const useYDoc = ({
       currentBlocksStr !== lastBlocksStr ||
       lastBlocksRef.current.length === 0
     ) {
-      console.log(
-        "YJS processBlocksUpdate: 블록 변경 감지",
-        sortedBlocks.length,
-        "blocks"
-      );
       lastBlocksRef.current = sortedBlocks;
       stableOnBlocksChange(sortedBlocks);
     }
@@ -95,8 +135,6 @@ export const useYDoc = ({
 
   const initializeYDoc = useCallback(() => {
     if (!pageId || isInitializedRef.current) return;
-
-    console.log("YJS initializing for page:", pageId);
 
     if (providerRef.current) {
       providerRef.current.destroy();
@@ -124,7 +162,6 @@ export const useYDoc = ({
     isInitializedRef.current = true;
 
     provider.on("status", (event: { status: string }) => {
-      console.log("YJS provider status:", event.status);
       setIsConnected(event.status === "connected");
 
       if (event.status === "connected") {
@@ -135,26 +172,20 @@ export const useYDoc = ({
     });
 
     provider.on("connect", () => {
-      console.log("YJS provider connected");
       processBlocksUpdate();
     });
 
     provider.on("sync", () => {
-      console.log("YJS provider synced");
       processBlocksUpdate();
     });
 
-    // 즉시 블록 변경 감지
     const handleBlocksChange = () => {
-      console.log("YJS blocks changed - immediate");
       processBlocksUpdate();
     };
 
     blocksMap.observe(handleBlocksChange);
 
-    // YText 변경도 감지
     ydoc.on("update", () => {
-      console.log("YJS document updated");
       setTimeout(processBlocksUpdate, 10);
     });
 
@@ -190,13 +221,11 @@ export const useYDoc = ({
       stableOnUsersChange(users);
     });
 
-    // 초기 로딩
     setTimeout(() => {
       processBlocksUpdate();
     }, 200);
 
     return () => {
-      console.log("YJS cleanup");
       blocksMap.unobserve(handleBlocksChange);
       provider.destroy();
       ydoc.destroy();
@@ -214,8 +243,6 @@ export const useYDoc = ({
     (blockId: string, content: any) => {
       if (!blocksMapRef.current || !ydocRef.current) return;
 
-      console.log("YJS updateBlock:", blockId, content);
-
       ydocRef.current.transact(() => {
         const existingBlock = blocksMapRef.current!.get(blockId) || {};
         const updatedBlock = {
@@ -225,11 +252,49 @@ export const useYDoc = ({
           updatedAt: new Date().toISOString(),
         };
 
+        if (content.level !== undefined) {
+          updatedBlock.level = content.level;
+          updatedBlock.metadata = {
+            ...updatedBlock.metadata,
+            level: content.level,
+          };
+        }
+
+        if (content.url !== undefined) {
+          updatedBlock.url = content.url;
+          updatedBlock.metadata = {
+            ...updatedBlock.metadata,
+            url: content.url,
+          };
+        }
+
+        if (content.caption !== undefined) {
+          updatedBlock.caption = content.caption;
+          updatedBlock.metadata = {
+            ...updatedBlock.metadata,
+            caption: content.caption,
+          };
+        }
+
+        if (content.headers !== undefined) {
+          updatedBlock.headers = content.headers;
+          updatedBlock.metadata = {
+            ...updatedBlock.metadata,
+            headers: content.headers,
+          };
+        }
+
+        if (content.rows !== undefined) {
+          updatedBlock.rows = content.rows;
+          updatedBlock.metadata = {
+            ...updatedBlock.metadata,
+            rows: content.rows,
+          };
+        }
+
         blocksMapRef.current!.set(blockId, updatedBlock);
-        console.log("YJS block updated:", updatedBlock);
       });
 
-      // 즉시 블록 업데이트 반영
       setTimeout(() => {
         processBlocksUpdate();
       }, 10);
@@ -240,8 +305,6 @@ export const useYDoc = ({
   const deleteBlock = useCallback(
     (blockId: string) => {
       if (!blocksMapRef.current || !ydocRef.current) return;
-
-      console.log("YJS deleteBlock:", blockId);
 
       ydocRef.current.transact(() => {
         blocksMapRef.current!.delete(blockId);
@@ -258,8 +321,6 @@ export const useYDoc = ({
     (blockId: string, content: any, position: number) => {
       if (!blocksMapRef.current || !ydocRef.current) return;
 
-      console.log("YJS addBlock:", blockId, content, position);
-
       ydocRef.current.transact(() => {
         const newBlock = {
           ...content,
@@ -269,8 +330,25 @@ export const useYDoc = ({
           updatedAt: new Date().toISOString(),
         };
 
+        if (content.level !== undefined) {
+          newBlock.level = content.level;
+          newBlock.metadata = {
+            ...newBlock.metadata,
+            level: content.level,
+          };
+        }
+
+        if (content.headers !== undefined && content.rows !== undefined) {
+          newBlock.headers = content.headers;
+          newBlock.rows = content.rows;
+          newBlock.metadata = {
+            ...newBlock.metadata,
+            headers: content.headers,
+            rows: content.rows,
+          };
+        }
+
         blocksMapRef.current!.set(blockId, newBlock);
-        console.log("YJS block added:", newBlock);
       });
 
       setTimeout(() => {
@@ -332,7 +410,6 @@ export const useYDoc = ({
         ytext.insert(0, initialText);
       }
 
-      // YText 변경을 블록 Map에도 반영
       ytext.observe(() => {
         const content = ytext.toString();
         updateBlock(blockId, { content });

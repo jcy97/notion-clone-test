@@ -43,6 +43,7 @@ export const Editor: React.FC<Props> = ({
 
   const isUpdatingFromYjs = useRef(false);
   const isLocalUpdate = useRef(false);
+  const apiDebounceTimers = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   const getApiEndpoint = useCallback(
     (endpoint: string) => {
@@ -71,8 +72,6 @@ export const Editor: React.FC<Props> = ({
   } = useYDoc({
     pageId: page.id,
     onBlocksChange: useCallback((yBlocks: any) => {
-      console.log("YJS blocks change received:", yBlocks);
-
       if (yBlocks && yBlocks.length >= 0 && !isLocalUpdate.current) {
         isUpdatingFromYjs.current = true;
 
@@ -80,7 +79,6 @@ export const Editor: React.FC<Props> = ({
           (a: any, b: any) => (a.position || 0) - (b.position || 0)
         );
 
-        console.log("Setting blocks from YJS:", sortedBlocks);
         setBlocks(sortedBlocks);
 
         setTimeout(() => {
@@ -88,9 +86,7 @@ export const Editor: React.FC<Props> = ({
         }, 50);
       }
     }, []),
-    onUsersChange: useCallback((users: any) => {
-      console.log("YJS users change:", users);
-    }, []),
+    onUsersChange: useCallback((users: any) => {}, []),
   });
 
   const {
@@ -126,7 +122,6 @@ export const Editor: React.FC<Props> = ({
       const sortedBlocks = reorderBlocks(page.blocks || []);
       setBlocks(sortedBlocks);
 
-      // YJS에 초기 블록들 동기화
       sortedBlocks.forEach((block) => {
         if (updateYjsBlock) {
           updateYjsBlock(block.id, block);
@@ -136,13 +131,34 @@ export const Editor: React.FC<Props> = ({
     setPageTitle(page.title);
   }, [page, updateYjsBlock]);
 
+  const debouncedApiCall = useCallback(
+    (blockId: string, content: string, extra?: any) => {
+      const existingTimer = apiDebounceTimers.current.get(blockId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+
+      const timer = setTimeout(async () => {
+        try {
+          const endpoint = getApiEndpoint(
+            `/pages/${page.id}/blocks/${blockId}`
+          );
+          await api.put(endpoint, { content, ...extra });
+          apiDebounceTimers.current.delete(blockId);
+        } catch (error) {
+          console.error("블록 API 업데이트 실패:", error);
+        }
+      }, 1000);
+
+      apiDebounceTimers.current.set(blockId, timer);
+    },
+    [page.id, getApiEndpoint]
+  );
+
   const handleYTextChange = useCallback(
     (blockId: string, content: string) => {
       if (isUpdatingFromYjs.current) return;
 
-      console.log("YText changed:", blockId, content);
-
-      // 즉시 로컬 상태 업데이트
       setBlocks((prev) =>
         updateBlockUtil(prev, blockId, {
           content,
@@ -150,7 +166,6 @@ export const Editor: React.FC<Props> = ({
         })
       );
 
-      // YJS 블록 Map에도 업데이트
       if (updateYjsBlock) {
         updateYjsBlock(blockId, {
           content,
@@ -217,7 +232,6 @@ export const Editor: React.FC<Props> = ({
       try {
         const updateData = { content, ...extra };
 
-        // 즉시 로컬 상태 업데이트
         setBlocks((prev) =>
           updateBlockUtil(prev, blockId, {
             ...updateData,
@@ -225,7 +239,6 @@ export const Editor: React.FC<Props> = ({
           })
         );
 
-        // YJS 업데이트
         if (updateYjsBlock) {
           updateYjsBlock(blockId, {
             content,
@@ -234,9 +247,7 @@ export const Editor: React.FC<Props> = ({
           });
         }
 
-        // API 호출
-        const endpoint = getApiEndpoint(`/pages/${page.id}/blocks/${blockId}`);
-        await api.put(endpoint, updateData);
+        debouncedApiCall(blockId, content, extra);
       } catch (error) {
         console.error("블록 업데이트 실패:", error);
 
@@ -252,7 +263,7 @@ export const Editor: React.FC<Props> = ({
         }, 50);
       }
     },
-    [page.id, updateYjsBlock, getApiEndpoint]
+    [page.id, updateYjsBlock, debouncedApiCall]
   );
 
   const createNewBlock = useCallback(
@@ -279,7 +290,7 @@ export const Editor: React.FC<Props> = ({
         );
         setSelectedBlockId(newBlock.id);
 
-        if (type === "text" && createBlockText) {
+        if ((type === "text" || type === "heading") && createBlockText) {
           createBlockText(newBlock.id, "");
         }
 
@@ -408,6 +419,13 @@ export const Editor: React.FC<Props> = ({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [handleKeyDown]);
+
+  useEffect(() => {
+    return () => {
+      apiDebounceTimers.current.forEach((timer) => clearTimeout(timer));
+      apiDebounceTimers.current.clear();
+    };
+  }, []);
 
   const renderBlock = (block: Block) => {
     const baseProps = {
