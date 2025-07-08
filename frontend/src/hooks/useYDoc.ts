@@ -43,13 +43,60 @@ export const useYDoc = ({
   const providerRef = useRef<SocketIOProvider | null>(null);
   const blocksMapRef = useRef<Y.Map<any> | null>(null);
   const awarenessRef = useRef<any>(null);
-  const lastBlocksHashRef = useRef<string>("");
+  const isInitializedRef = useRef(false);
+  const lastBlocksRef = useRef<any[]>([]);
 
   const stableOnBlocksChange = useCallback(onBlocksChange || (() => {}), []);
   const stableOnUsersChange = useCallback(onUsersChange || (() => {}), []);
 
+  const processBlocksUpdate = useCallback(() => {
+    if (!blocksMapRef.current) return;
+
+    const blocks = Array.from(blocksMapRef.current.entries()).map(
+      ([id, data]) => ({
+        id,
+        ...(data as Record<string, any>),
+      })
+    );
+
+    const sortedBlocks = blocks.sort(
+      (a: any, b: any) => (a.position || 0) - (b.position || 0)
+    );
+
+    // 블록이 실제로 변경되었는지 확인
+    const currentBlocksStr = JSON.stringify(
+      sortedBlocks.map((b: any) => ({
+        id: b.id,
+        content: b.content,
+        position: b.position,
+      }))
+    );
+    const lastBlocksStr = JSON.stringify(
+      lastBlocksRef.current.map((b) => ({
+        id: b.id,
+        content: b.content,
+        position: b.position,
+      }))
+    );
+
+    if (
+      currentBlocksStr !== lastBlocksStr ||
+      lastBlocksRef.current.length === 0
+    ) {
+      console.log(
+        "YJS processBlocksUpdate: 블록 변경 감지",
+        sortedBlocks.length,
+        "blocks"
+      );
+      lastBlocksRef.current = sortedBlocks;
+      stableOnBlocksChange(sortedBlocks);
+    }
+  }, [stableOnBlocksChange]);
+
   const initializeYDoc = useCallback(() => {
-    if (!pageId) return;
+    if (!pageId || isInitializedRef.current) return;
+
+    console.log("YJS initializing for page:", pageId);
 
     if (providerRef.current) {
       providerRef.current.destroy();
@@ -74,44 +121,42 @@ export const useYDoc = ({
     blocksMapRef.current = blocksMap;
 
     awarenessRef.current = provider.awareness;
+    isInitializedRef.current = true;
 
     provider.on("status", (event: { status: string }) => {
+      console.log("YJS provider status:", event.status);
       setIsConnected(event.status === "connected");
+
+      if (event.status === "connected") {
+        setTimeout(() => {
+          processBlocksUpdate();
+        }, 100);
+      }
     });
 
+    provider.on("connect", () => {
+      console.log("YJS provider connected");
+      processBlocksUpdate();
+    });
+
+    provider.on("sync", () => {
+      console.log("YJS provider synced");
+      processBlocksUpdate();
+    });
+
+    // 즉시 블록 변경 감지
     const handleBlocksChange = () => {
-      const blocks = Array.from(blocksMap.entries()).map(([id, data]) => ({
-        id,
-        ...(data as Record<string, any>),
-      }));
-
-      console.log("YJS handleBlocksChange:", blocks);
-
-      if (blocks.length === 0) {
-        console.log("YJS blocks empty, not triggering change");
-        return;
-      }
-
-      const blocksHash = JSON.stringify(
-        blocks.map((b: any) => ({
-          id: b.id,
-          content: b.content || "",
-          position: b.position || 0,
-        }))
-      );
-
-      if (blocksHash !== lastBlocksHashRef.current) {
-        lastBlocksHashRef.current = blocksHash;
-        console.log(
-          "YJS triggering onBlocksChange with",
-          blocks.length,
-          "blocks"
-        );
-        stableOnBlocksChange(blocks);
-      }
+      console.log("YJS blocks changed - immediate");
+      processBlocksUpdate();
     };
 
     blocksMap.observe(handleBlocksChange);
+
+    // YText 변경도 감지
+    ydoc.on("update", () => {
+      console.log("YJS document updated");
+      setTimeout(processBlocksUpdate, 10);
+    });
 
     awarenessRef.current.on("change", () => {
       const states = awarenessRef.current.getStates();
@@ -145,55 +190,94 @@ export const useYDoc = ({
       stableOnUsersChange(users);
     });
 
+    // 초기 로딩
+    setTimeout(() => {
+      processBlocksUpdate();
+    }, 200);
+
     return () => {
+      console.log("YJS cleanup");
       blocksMap.unobserve(handleBlocksChange);
       provider.destroy();
       ydoc.destroy();
+      isInitializedRef.current = false;
+      lastBlocksRef.current = [];
     };
-  }, [pageId, stableOnBlocksChange, stableOnUsersChange]);
+  }, [pageId, processBlocksUpdate, stableOnUsersChange]);
 
   useEffect(() => {
     const cleanup = initializeYDoc();
     return cleanup;
   }, [initializeYDoc]);
 
-  const updateBlock = useCallback((blockId: string, content: any) => {
-    if (!blocksMapRef.current) return;
+  const updateBlock = useCallback(
+    (blockId: string, content: any) => {
+      if (!blocksMapRef.current || !ydocRef.current) return;
 
-    ydocRef.current?.transact(() => {
-      const existingBlock = blocksMapRef.current!.get(blockId);
-      blocksMapRef.current!.set(blockId, {
-        ...existingBlock,
-        ...content,
-        id: blockId,
-        updatedAt: new Date().toISOString(),
+      console.log("YJS updateBlock:", blockId, content);
+
+      ydocRef.current.transact(() => {
+        const existingBlock = blocksMapRef.current!.get(blockId) || {};
+        const updatedBlock = {
+          ...existingBlock,
+          ...content,
+          id: blockId,
+          updatedAt: new Date().toISOString(),
+        };
+
+        blocksMapRef.current!.set(blockId, updatedBlock);
+        console.log("YJS block updated:", updatedBlock);
       });
-    });
-  }, []);
 
-  const deleteBlock = useCallback((blockId: string) => {
-    if (!blocksMapRef.current) return;
+      // 즉시 블록 업데이트 반영
+      setTimeout(() => {
+        processBlocksUpdate();
+      }, 10);
+    },
+    [processBlocksUpdate]
+  );
 
-    ydocRef.current?.transact(() => {
-      blocksMapRef.current!.delete(blockId);
-    });
-  }, []);
+  const deleteBlock = useCallback(
+    (blockId: string) => {
+      if (!blocksMapRef.current || !ydocRef.current) return;
+
+      console.log("YJS deleteBlock:", blockId);
+
+      ydocRef.current.transact(() => {
+        blocksMapRef.current!.delete(blockId);
+      });
+
+      setTimeout(() => {
+        processBlocksUpdate();
+      }, 10);
+    },
+    [processBlocksUpdate]
+  );
 
   const addBlock = useCallback(
     (blockId: string, content: any, position: number) => {
-      if (!blocksMapRef.current) return;
+      if (!blocksMapRef.current || !ydocRef.current) return;
 
-      ydocRef.current?.transact(() => {
-        blocksMapRef.current!.set(blockId, {
+      console.log("YJS addBlock:", blockId, content, position);
+
+      ydocRef.current.transact(() => {
+        const newBlock = {
           ...content,
           id: blockId,
           position,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        });
+        };
+
+        blocksMapRef.current!.set(blockId, newBlock);
+        console.log("YJS block added:", newBlock);
       });
+
+      setTimeout(() => {
+        processBlocksUpdate();
+      }, 10);
     },
-    []
+    [processBlocksUpdate]
   );
 
   const setUserInfo = useCallback((userInfo: any) => {
@@ -247,9 +331,16 @@ export const useYDoc = ({
       if (ytext.length === 0 && initialText) {
         ytext.insert(0, initialText);
       }
+
+      // YText 변경을 블록 Map에도 반영
+      ytext.observe(() => {
+        const content = ytext.toString();
+        updateBlock(blockId, { content });
+      });
+
       return ytext;
     },
-    []
+    [updateBlock]
   );
 
   const deleteBlockText = useCallback((blockId: string) => {

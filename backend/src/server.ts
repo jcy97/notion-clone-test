@@ -25,18 +25,28 @@ const io = new Server(server, {
 const ysocketio = new YSocketIO(io, {
   authenticate: async (auth: any): Promise<boolean> => {
     try {
+      // 토큰이 없으면 게스트 사용자로 허용 (SharedPage용)
+      if (!auth?.token) {
+        console.log("YJS: 게스트 사용자 인증 허용");
+        return true;
+      }
+
       const jwt = await import("jsonwebtoken");
       const { User } = await import("./models/User");
-
-      if (!auth?.token) return false;
 
       const jwtSecret = process.env.JWT_SECRET || "your-secret-key";
       const decoded = jwt.verify(auth.token, jwtSecret) as { userId: string };
       const user = await User.findById(decoded.userId);
 
-      return !!user;
-    } catch {
-      return false;
+      const isAuthenticated = !!user;
+      console.log(`YJS: 사용자 인증 ${isAuthenticated ? "성공" : "실패"}`, {
+        userId: decoded.userId,
+      });
+      return isAuthenticated;
+    } catch (error: any) {
+      console.log("YJS: 인증 실패, 게스트로 허용", error.message);
+      // 인증 실패 시에도 게스트로 허용
+      return true;
     }
   },
   gcEnabled: true,

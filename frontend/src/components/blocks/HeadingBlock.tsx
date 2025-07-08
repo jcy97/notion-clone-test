@@ -18,6 +18,7 @@ interface Props {
   onTypingStop?: (blockId: string) => void;
   userCursors?: Map<string, any>;
   typingUsers?: Map<string, any>;
+  onYTextChange?: (blockId: string, content: string) => void;
 }
 
 export const HeadingBlock: React.FC<Props> = ({
@@ -34,6 +35,7 @@ export const HeadingBlock: React.FC<Props> = ({
   onTypingStop,
   userCursors = new Map(),
   typingUsers = new Map(),
+  onYTextChange,
 }) => {
   const [isComposing, setIsComposing] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
@@ -71,12 +73,20 @@ export const HeadingBlock: React.FC<Props> = ({
 
     if (editorRef.current.textContent !== ytextContent) {
       const selection = window.getSelection();
-      const range = selection?.getRangeAt(0);
-      const startOffset = range?.startOffset || 0;
+      let startOffset = 0;
+
+      if (selection && selection.rangeCount > 0) {
+        const range = selection.getRangeAt(0);
+        startOffset = range.startOffset;
+      }
 
       editorRef.current.textContent = ytextContent;
 
-      if (isSelected && selection && range) {
+      if (onYTextChange) {
+        onYTextChange(block.id, ytextContent);
+      }
+
+      if (isSelected && selection && selection.rangeCount > 0) {
         const newRange = document.createRange();
         const textNode = editorRef.current.firstChild;
         if (textNode) {
@@ -94,7 +104,7 @@ export const HeadingBlock: React.FC<Props> = ({
     setTimeout(() => {
       isUpdatingFromYjs.current = false;
     }, 0);
-  }, [ytext, isSelected]);
+  }, [ytext, isSelected, onYTextChange, block.id]);
 
   useEffect(() => {
     if (!ytext) return;
@@ -109,7 +119,8 @@ export const HeadingBlock: React.FC<Props> = ({
 
     if (
       editorRef.current &&
-      !editorRef.current.textContent &&
+      (!editorRef.current.textContent ||
+        editorRef.current.textContent !== ytext.toString()) &&
       ytext.length > 0
     ) {
       syncWithYText();
@@ -119,27 +130,6 @@ export const HeadingBlock: React.FC<Props> = ({
       ytext.unobserve(handleYTextChange);
     };
   }, [ytext, syncWithYText]);
-
-  useEffect(() => {
-    if (!ytext || !editorRef.current?.textContent || isUpdatingFromYjs.current)
-      return;
-
-    const currentContent = editorRef.current.textContent;
-    const ytextContent = ytext.toString();
-
-    if (
-      currentContent &&
-      ytextContent !== currentContent &&
-      !isUpdatingToYjs.current
-    ) {
-      isUpdatingToYjs.current = true;
-      ytext.delete(0, ytext.length);
-      ytext.insert(0, currentContent);
-      setTimeout(() => {
-        isUpdatingToYjs.current = false;
-      }, 0);
-    }
-  }, [block.content, ytext]);
 
   const updateCursorPosition = useCallback(() => {
     if (!isSelected || !onCursorMove || !editorRef.current) return;

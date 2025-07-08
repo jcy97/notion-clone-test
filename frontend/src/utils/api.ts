@@ -85,11 +85,14 @@ api.interceptors.response.use(
   },
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem("token");
+      const isSharedPage = window.location.pathname.includes("/shared/");
 
-      const currentPath = window.location.pathname;
-      if (currentPath !== "/login" && currentPath !== "/register") {
-        window.location.href = "/login";
+      if (!isSharedPage) {
+        localStorage.removeItem("token");
+        const currentPath = window.location.pathname;
+        if (currentPath !== "/login" && currentPath !== "/register") {
+          window.location.href = "/login";
+        }
       }
 
       return Promise.reject(error);
@@ -130,6 +133,19 @@ export const apiHelpers = {
       api.put(`/pages/${pageId}/blocks/${blockId}`, data),
     delete: (pageId: string, blockId: string) =>
       api.delete(`/pages/${pageId}/blocks/${blockId}`),
+  },
+
+  shared: {
+    getPage: (shareId: string) => api.get(`/shared/${shareId}`),
+    updatePage: (pageId: string, data: any) =>
+      api.put(`/shared/${pageId}`, data),
+    createBlock: (pageId: string, data: any) =>
+      api.post(`/shared/${pageId}/blocks`, data),
+    updateBlock: (pageId: string, blockId: string, data: any) =>
+      api.put(`/shared/${pageId}/blocks/${blockId}`, data),
+    deleteBlock: (pageId: string, blockId: string) =>
+      api.delete(`/shared/${pageId}/blocks/${blockId}`),
+    share: (pageId: string) => api.post(`/shared/${pageId}/share`),
   },
 
   auth: {

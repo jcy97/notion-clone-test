@@ -22,9 +22,14 @@ import {
 interface Props {
   page: Page;
   onPageUpdate: (page: Page) => void;
+  isSharedPage?: boolean;
 }
 
-export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
+export const Editor: React.FC<Props> = ({
+  page,
+  onPageUpdate,
+  isSharedPage = false,
+}) => {
   const { user } = useAuth();
   const [blocks, setBlocks] = useState<Block[]>(page.blocks || []);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -37,6 +42,17 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   const [pageTitle, setPageTitle] = useState(page.title);
 
   const isUpdatingFromYjs = useRef(false);
+  const isLocalUpdate = useRef(false);
+
+  const getApiEndpoint = useCallback(
+    (endpoint: string) => {
+      if (isSharedPage) {
+        return endpoint.replace(`/pages/${page.id}`, `/shared/${page.id}`);
+      }
+      return endpoint;
+    },
+    [isSharedPage, page.id]
+  );
 
   const {
     isConnected: yIsConnected,
@@ -49,24 +65,32 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     getBlockText,
     createBlockText,
     deleteBlockText,
+    updateBlock: updateYjsBlock,
+    addBlock: addYjsBlock,
+    deleteBlock: deleteYjsBlock,
   } = useYDoc({
     pageId: page.id,
     onBlocksChange: useCallback((yBlocks: any) => {
-      console.log("YJS blocks change:", yBlocks);
-      if (yBlocks && yBlocks.length > 0 && !isUpdatingFromYjs.current) {
+      console.log("YJS blocks change received:", yBlocks);
+
+      if (yBlocks && yBlocks.length >= 0 && !isLocalUpdate.current) {
         isUpdatingFromYjs.current = true;
+
         const sortedBlocks = yBlocks.sort(
           (a: any, b: any) => (a.position || 0) - (b.position || 0)
         );
+
+        console.log("Setting blocks from YJS:", sortedBlocks);
         setBlocks(sortedBlocks);
+
         setTimeout(() => {
           isUpdatingFromYjs.current = false;
-        }, 200);
-      } else if (yBlocks && yBlocks.length === 0) {
-        console.log("YJS blocks empty, ignoring");
+        }, 50);
       }
     }, []),
-    onUsersChange: useCallback((users: any) => {}, []),
+    onUsersChange: useCallback((users: any) => {
+      console.log("YJS users change:", users);
+    }, []),
   });
 
   const {
@@ -79,7 +103,6 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     emitSelectionChange,
     emitTypingStart,
     emitTypingStop,
-    getUsersInBlock,
   } = useCollaboration(page.id);
 
   const isConnected = yIsConnected && socketConnected;
@@ -99,24 +122,65 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
   }, [user, setUserInfo]);
 
   useEffect(() => {
-    if (!isUpdatingFromYjs.current) {
-      setBlocks(reorderBlocks(page.blocks || []));
+    if (!isUpdatingFromYjs.current && !isLocalUpdate.current) {
+      const sortedBlocks = reorderBlocks(page.blocks || []);
+      setBlocks(sortedBlocks);
+
+      // YJS에 초기 블록들 동기화
+      sortedBlocks.forEach((block) => {
+        if (updateYjsBlock) {
+          updateYjsBlock(block.id, block);
+        }
+      });
     }
     setPageTitle(page.title);
-  }, [page]);
+  }, [page, updateYjsBlock]);
+
+  const handleYTextChange = useCallback(
+    (blockId: string, content: string) => {
+      if (isUpdatingFromYjs.current) return;
+
+      console.log("YText changed:", blockId, content);
+
+      // 즉시 로컬 상태 업데이트
+      setBlocks((prev) =>
+        updateBlockUtil(prev, blockId, {
+          content,
+          updatedAt: new Date(),
+        })
+      );
+
+      // YJS 블록 Map에도 업데이트
+      if (updateYjsBlock) {
+        updateYjsBlock(blockId, {
+          content,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    },
+    [updateYjsBlock]
+  );
 
   useEffect(() => {
     const createFirstBlock = async () => {
       if (blocks && blocks.length === 0) {
         try {
-          const response = await api.post(`/pages/${page.id}/blocks`, {
+          const endpoint = getApiEndpoint(`/pages/${page.id}/blocks`);
+          const response = await api.post(endpoint, {
             type: "text",
             content: "",
             position: 0,
           });
 
           const newBlock = response.data.block;
-          const ytext = createBlockText(newBlock.id, "");
+
+          if (createBlockText) {
+            createBlockText(newBlock.id, "");
+          }
+
+          if (addYjsBlock) {
+            addYjsBlock(newBlock.id, newBlock, 0);
+          }
 
           setBlocks([newBlock]);
           setSelectedBlockId(newBlock.id);
@@ -127,29 +191,33 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
     };
 
     createFirstBlock();
-  }, [blocks?.length, page.id, createBlockText]);
+  }, [blocks?.length, page.id, createBlockText, addYjsBlock, getApiEndpoint]);
 
   const handleTitleUpdate = useCallback(
     async (newTitle: string) => {
       setPageTitle(newTitle);
 
       try {
-        await api.put(`/pages/${page.id}`, { title: newTitle });
+        const endpoint = getApiEndpoint(`/pages/${page.id}`);
+        await api.put(endpoint, { title: newTitle });
         onPageUpdate({ ...page, title: newTitle });
       } catch (error) {
         console.error("제목 업데이트 실패:", error);
       }
     },
-    [page, onPageUpdate]
+    [page, onPageUpdate, getApiEndpoint]
   );
 
   const updateBlock = useCallback(
     async (blockId: string, content: string, extra?: any) => {
       if (isUpdatingFromYjs.current) return;
 
+      isLocalUpdate.current = true;
+
       try {
         const updateData = { content, ...extra };
 
+        // 즉시 로컬 상태 업데이트
         setBlocks((prev) =>
           updateBlockUtil(prev, blockId, {
             ...updateData,
@@ -157,32 +225,34 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           })
         );
 
-        await api.put(`/pages/${page.id}/blocks/${blockId}`, updateData);
+        // YJS 업데이트
+        if (updateYjsBlock) {
+          updateYjsBlock(blockId, {
+            content,
+            ...extra,
+            updatedAt: new Date().toISOString(),
+          });
+        }
+
+        // API 호출
+        const endpoint = getApiEndpoint(`/pages/${page.id}/blocks/${blockId}`);
+        await api.put(endpoint, updateData);
       } catch (error) {
         console.error("블록 업데이트 실패:", error);
+
         setBlocks((prev) =>
           updateBlockUtil(prev, blockId, {
             content: prev.find((b) => b.id === blockId)?.content || "",
             updatedAt: new Date(),
           })
         );
+      } finally {
+        setTimeout(() => {
+          isLocalUpdate.current = false;
+        }, 50);
       }
     },
-    [page.id]
-  );
-
-  const updateBlockFromYjs = useCallback(
-    (blockId: string, content: string, extra?: any) => {
-      const updateData = { content, ...extra };
-
-      setBlocks((prev) =>
-        updateBlockUtil(prev, blockId, {
-          ...updateData,
-          updatedAt: new Date(),
-        })
-      );
-    },
-    []
+    [page.id, updateYjsBlock, getApiEndpoint]
   );
 
   const createNewBlock = useCallback(
@@ -193,13 +263,16 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           : null;
         const position = afterBlock ? afterBlock.position + 1 : blocks.length;
 
-        const response = await api.post(`/pages/${page.id}/blocks`, {
+        const endpoint = getApiEndpoint(`/pages/${page.id}/blocks`);
+        const response = await api.post(endpoint, {
           type,
           content: "",
           position,
         });
 
         const newBlock = response.data.block;
+
+        isLocalUpdate.current = true;
 
         setBlocks((prev) =>
           insertBlockAtPosition(prev, newBlock, afterBlockId)
@@ -210,23 +283,38 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           createBlockText(newBlock.id, "");
         }
 
+        if (addYjsBlock) {
+          addYjsBlock(newBlock.id, newBlock, position);
+        }
+
+        setTimeout(() => {
+          isLocalUpdate.current = false;
+        }, 50);
+
         return newBlock;
       } catch (error) {
         console.error("블록 생성 실패:", error);
       }
     },
-    [page.id, blocks, createBlockText]
+    [page.id, blocks, createBlockText, addYjsBlock, getApiEndpoint]
   );
 
   const deleteBlock = useCallback(
     async (blockId: string) => {
       try {
-        await api.delete(`/pages/${page.id}/blocks/${blockId}`);
+        const endpoint = getApiEndpoint(`/pages/${page.id}/blocks/${blockId}`);
+        await api.delete(endpoint);
+
+        isLocalUpdate.current = true;
 
         setBlocks((prev) => removeBlock(prev, blockId));
 
         if (deleteBlockText) {
           deleteBlockText(blockId);
+        }
+
+        if (deleteYjsBlock) {
+          deleteYjsBlock(blockId);
         }
 
         const blockIndex = blocks.findIndex((b) => b.id === blockId);
@@ -235,11 +323,15 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
         } else if (blocks.length > 1) {
           setSelectedBlockId(blocks[1]?.id);
         }
+
+        setTimeout(() => {
+          isLocalUpdate.current = false;
+        }, 50);
       } catch (error) {
         console.error("블록 삭제 실패:", error);
       }
     },
-    [page.id, blocks, deleteBlockText]
+    [page.id, blocks, deleteBlockText, deleteYjsBlock, getApiEndpoint]
   );
 
   const handleNewBlock = useCallback(
@@ -345,6 +437,7 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
               block={block}
               onUpdate={updateBlock}
               onNewBlock={handleNewBlock}
+              onYTextChange={handleYTextChange}
               ytext={
                 getBlockText ? getBlockText(block.id) || undefined : undefined
               }
@@ -356,11 +449,13 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           <div data-block-id={block.id}>
             <HeadingBlock
               {...baseProps}
+              {...collaborationProps}
               block={block}
               onUpdate={(id, content, level) =>
                 updateBlock(id, content, { level })
               }
               onNewBlock={handleNewBlock}
+              onYTextChange={handleYTextChange}
               ytext={
                 getBlockText ? getBlockText(block.id) || undefined : undefined
               }
@@ -473,6 +568,11 @@ export const Editor: React.FC<Props> = ({ page, onPageUpdate }) => {
           <div>온라인 사용자: {onlineUsers.length}명</div>
           <div>활성 커서: {userCursors.size}개</div>
           <div>입력 중: {typingUsers.size}명</div>
+          <div>
+            YJS 업데이트 중: {isUpdatingFromYjs.current ? "예" : "아니오"}
+          </div>
+          <div>로컬 업데이트 중: {isLocalUpdate.current ? "예" : "아니오"}</div>
+          <div>공유 페이지: {isSharedPage ? "예" : "아니오"}</div>
         </div>
       )}
     </div>

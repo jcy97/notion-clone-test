@@ -7,12 +7,14 @@ interface AuthenticatedSocket extends Socket {
   userId?: string;
   userName?: string;
   userAvatar?: string;
+  isGuest?: boolean;
 }
 
 interface UserInfo {
   userId: string;
   userName: string;
   userAvatar?: string;
+  isGuest?: boolean;
   cursor?: {
     blockId: string;
     position: number;
@@ -34,7 +36,16 @@ export const setupCollaborationSocket = (io: Server) => {
       const token = socket.handshake.auth.token;
 
       if (!token) {
-        return next(new Error("인증 토큰이 필요합니다."));
+        // 토큰이 없으면 게스트 사용자로 처리
+        socket.userId = `guest_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+        socket.userName = `게스트 ${Math.floor(Math.random() * 1000)}`;
+        socket.isGuest = true;
+        console.log(
+          `게스트 사용자 연결: ${socket.userName} (${socket.userId})`
+        );
+        return next();
       }
 
       const jwtSecret = process.env.JWT_SECRET || "your-secret-key";
@@ -42,33 +53,68 @@ export const setupCollaborationSocket = (io: Server) => {
 
       const user = await User.findById(decoded.userId);
       if (!user) {
-        return next(new Error("유효하지 않은 토큰입니다."));
+        // 인증 실패해도 게스트로 허용
+        socket.userId = `guest_${Date.now()}_${Math.random()
+          .toString(36)
+          .substr(2, 9)}`;
+        socket.userName = `게스트 ${Math.floor(Math.random() * 1000)}`;
+        socket.isGuest = true;
+        console.log(
+          `인증 실패, 게스트로 처리: ${socket.userName} (${socket.userId})`
+        );
+        return next();
       }
 
       socket.userId = user.id;
       socket.userName = user.name;
       socket.userAvatar = user.avatar;
+      socket.isGuest = false;
       next();
     } catch (error) {
-      next(new Error("인증에 실패했습니다."));
+      // 에러 발생 시에도 게스트로 허용
+      socket.userId = `guest_${Date.now()}_${Math.random()
+        .toString(36)
+        .substr(2, 9)}`;
+      socket.userName = `게스트 ${Math.floor(Math.random() * 1000)}`;
+      socket.isGuest = true;
+      console.log(
+        `인증 에러, 게스트로 처리: ${socket.userName} (${socket.userId})`
+      );
+      next();
     }
   });
 
   io.on("connection", (socket: AuthenticatedSocket) => {
-    console.log(`사용자 연결: ${socket.userName} (${socket.userId})`);
+    console.log(
+      `사용자 연결: ${socket.userName} (${socket.userId}) ${
+        socket.isGuest ? "[게스트]" : "[인증됨]"
+      }`
+    );
 
     socket.on("join-page", async (pageId: string) => {
       try {
-        const page = await Page.findOne({
-          _id: pageId,
-          $or: [
-            { ownerId: socket.userId },
-            { collaborators: socket.userId },
-            { isPublic: true },
-          ],
-        });
+        // 게스트 사용자는 공개 페이지만 접근 가능
+        let canAccess = false;
 
-        if (!page) {
+        if (socket.isGuest) {
+          const page = await Page.findOne({
+            _id: pageId,
+            isPublic: true,
+          });
+          canAccess = !!page;
+        } else {
+          const page = await Page.findOne({
+            _id: pageId,
+            $or: [
+              { ownerId: socket.userId },
+              { collaborators: socket.userId },
+              { isPublic: true },
+            ],
+          });
+          canAccess = !!page;
+        }
+
+        if (!canAccess) {
           socket.emit("error", { message: "페이지에 접근할 권한이 없습니다." });
           return;
         }
@@ -87,6 +133,7 @@ export const setupCollaborationSocket = (io: Server) => {
           userId: socket.userId!,
           userName: socket.userName!,
           userAvatar: socket.userAvatar,
+          isGuest: socket.isGuest,
           lastSeen: Date.now(),
         };
 
@@ -99,7 +146,11 @@ export const setupCollaborationSocket = (io: Server) => {
         socket.emit("page-users", onlineUsers);
         socket.to(pageId).emit("user-list-updated", onlineUsers);
 
-        console.log(`${socket.userName}이 페이지 ${pageId}에 입장했습니다.`);
+        console.log(
+          `${socket.userName}이 페이지 ${pageId}에 입장했습니다. ${
+            socket.isGuest ? "[게스트]" : "[인증됨]"
+          }`
+        );
       } catch (error) {
         console.error("페이지 입장 오류:", error);
         socket.emit("error", { message: "페이지 입장에 실패했습니다." });
@@ -186,7 +237,11 @@ export const setupCollaborationSocket = (io: Server) => {
 
     socket.on("disconnect", () => {
       handleUserDisconnect(socket);
-      console.log(`사용자 연결 해제: ${socket.userName} (${socket.userId})`);
+      console.log(
+        `사용자 연결 해제: ${socket.userName} (${socket.userId}) ${
+          socket.isGuest ? "[게스트]" : "[인증됨]"
+        }`
+      );
     });
 
     socket.on("error", (error) => {
@@ -234,6 +289,7 @@ export const setupCollaborationSocket = (io: Server) => {
     }
   };
 
+  // 비활성 사용자 정리
   setInterval(() => {
     const now = Date.now();
     const timeout = 30000;

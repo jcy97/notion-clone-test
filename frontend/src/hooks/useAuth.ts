@@ -8,9 +8,23 @@ export const useAuth = () => {
 
   useEffect(() => {
     const token = localStorage.getItem("token");
+
     if (token) {
       fetchUser();
     } else {
+      const isSharedPage = window.location.pathname.includes("/shared/");
+
+      if (isSharedPage) {
+        const guestUser: User = {
+          id: `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          email: "",
+          name: `게스트 ${Math.floor(Math.random() * 1000)}`,
+          avatar: undefined,
+          createdAt: new Date(),
+        };
+        setUser(guestUser);
+      }
+
       setLoading(false);
     }
   }, []);
@@ -21,6 +35,18 @@ export const useAuth = () => {
       setUser(response.data.user);
     } catch (error) {
       localStorage.removeItem("token");
+
+      const isSharedPage = window.location.pathname.includes("/shared/");
+      if (isSharedPage) {
+        const guestUser: User = {
+          id: `guest_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          email: "",
+          name: `게스트 ${Math.floor(Math.random() * 1000)}`,
+          avatar: undefined,
+          createdAt: new Date(),
+        };
+        setUser(guestUser);
+      }
     } finally {
       setLoading(false);
     }
@@ -47,11 +73,14 @@ export const useAuth = () => {
     setUser(null);
   };
 
+  const isGuest = user ? user.id.startsWith("guest_") : false;
+
   return {
     user,
     loading,
     login,
     register,
     logout,
+    isGuest,
   };
 };

@@ -4,14 +4,16 @@ import { Page } from "../../types/page.types";
 import { Editor } from "../editor/Editor";
 import { OnlineUsers, CollaborationStatus } from "../collaboration";
 import { useCollaboration } from "../../hooks/useCollaboration";
+import { useAuth } from "../../hooks/useAuth";
 import { api } from "../../utils/api";
 
 export const SharedPage: React.FC = () => {
   const { shareId } = useParams<{ shareId: string }>();
+  const { user } = useAuth();
   const [page, setPage] = useState<Page | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isReadOnly] = useState(true);
+  const [isGuest, setIsGuest] = useState(false);
 
   const { onlineUsers, isConnected } = useCollaboration(page?.id || "");
 
@@ -26,6 +28,7 @@ export const SharedPage: React.FC = () => {
       try {
         const response = await api.get(`/shared/${shareId}`);
         setPage(response.data.page);
+        setIsGuest(!user);
       } catch (error: any) {
         if (error.response?.status === 404) {
           setError("페이지를 찾을 수 없거나 공유가 중단되었습니다.");
@@ -40,9 +43,19 @@ export const SharedPage: React.FC = () => {
     };
 
     fetchSharedPage();
-  }, [shareId]);
+  }, [shareId, user]);
 
-  const handlePageUpdate = () => {};
+  const handlePageUpdate = async (updatedPage: Page) => {
+    try {
+      await api.put(`/pages/${updatedPage.id}`, {
+        title: updatedPage.title,
+        isPublic: updatedPage.isPublic,
+      });
+      setPage(updatedPage);
+    } catch (error) {
+      console.error("페이지 업데이트 실패:", error);
+    }
+  };
 
   if (loading) {
     return (
@@ -79,6 +92,41 @@ export const SharedPage: React.FC = () => {
     return <Navigate to="/" replace />;
   }
 
+  const handleShare = async () => {
+    try {
+      const currentUrl = window.location.href;
+
+      await navigator.clipboard.writeText(currentUrl);
+
+      const notification = document.createElement("div");
+      notification.className =
+        "fixed top-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg z-50 transition-all";
+      notification.innerHTML = `
+        <div class="flex items-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+          </svg>
+          현재 페이지 링크가 클립보드에 복사되었습니다!
+        </div>
+      `;
+
+      document.body.appendChild(notification);
+
+      setTimeout(() => {
+        notification.style.transform = "translateX(100%)";
+        setTimeout(() => {
+          document.body.removeChild(notification);
+        }, 300);
+      }, 2000);
+    } catch (error) {
+      console.error("페이지 공유 실패:", error);
+    }
+  };
+
+  const currentUserName = user?.name || "익명 사용자";
+  const hasCollaborators = onlineUsers.length > 0;
+  const isCollaborating = isConnected && hasCollaborators;
+
   return (
     <div className="h-screen flex flex-col bg-gray-50">
       <header className="bg-white border-b border-gray-200 px-6 py-3">
@@ -90,9 +138,17 @@ export const SharedPage: React.FC = () => {
             <div className="flex items-center gap-2">
               <span className="text-gray-500">/</span>
               <span className="text-gray-700">{page.title || "제목 없음"}</span>
-              <span className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                읽기 전용
+              <span className="text-sm text-gray-500 bg-blue-100 px-2 py-1 rounded">
+                공유됨
               </span>
+              {isCollaborating && (
+                <div className="flex items-center gap-2 ml-3">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  <span className="text-sm text-green-600 font-medium">
+                    실시간 협업
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -101,144 +157,74 @@ export const SharedPage: React.FC = () => {
               isConnected={isConnected}
               onlineCount={onlineUsers.length + 1}
             />
-            <OnlineUsers users={onlineUsers} />
-            <a
-              href="/"
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+
+            {hasCollaborators && (
+              <OnlineUsers users={onlineUsers} currentUserId={user?.id} />
+            )}
+
+            <button
+              onClick={handleShare}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
             >
-              내 워크스페이스로
-            </a>
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z"
+                />
+              </svg>
+              공유
+            </button>
+
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-medium">
+                {user?.avatar ? (
+                  <img
+                    src={user.avatar}
+                    alt={currentUserName}
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : (
+                  currentUserName.charAt(0).toUpperCase()
+                )}
+              </div>
+              <span className="text-gray-700">{currentUserName}</span>
+              {isGuest && (
+                <span className="text-xs text-gray-500">(게스트)</span>
+              )}
+            </div>
+
+            {user ? (
+              <a
+                href="/"
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              >
+                내 워크스페이스로
+              </a>
+            ) : (
+              <a
+                href="/login"
+                className="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
+              >
+                로그인
+              </a>
+            )}
           </div>
         </div>
       </header>
 
       <main className="flex-1 overflow-auto bg-white">
-        <div className="max-w-4xl mx-auto px-6 py-8">
-          {isReadOnly && (
-            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <div className="flex items-center gap-2">
-                <svg
-                  className="w-5 h-5 text-blue-600"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-                <span className="text-blue-800 font-medium">
-                  이 페이지는 읽기 전용입니다. 실시간으로 다른 사용자들과 함께
-                  보고 있습니다.
-                </span>
-              </div>
-            </div>
-          )}
-
-          <div className="pointer-events-none select-text">
-            <h1 className="text-4xl font-bold mb-8 text-gray-900">
-              {page.title || "제목 없음"}
-            </h1>
-
-            <div className="space-y-1">
-              {page.blocks?.map((block) => (
-                <div key={block.id} className="py-1 px-3 rounded">
-                  {block.type === "text" && (
-                    <div
-                      className="text-gray-900"
-                      style={{ wordBreak: "break-word" }}
-                    >
-                      {block.content || ""}
-                    </div>
-                  )}
-                  {block.type === "heading" && (
-                    <div
-                      className={`text-gray-900 font-bold ${
-                        (block as any).level === 1
-                          ? "text-3xl"
-                          : (block as any).level === 2
-                          ? "text-2xl"
-                          : "text-xl"
-                      }`}
-                    >
-                      {block.content || ""}
-                    </div>
-                  )}
-                  {block.type === "image" && (
-                    <div>
-                      <img
-                        src={(block as any).url || ""}
-                        alt={(block as any).caption || ""}
-                        className="max-w-full h-auto rounded-lg"
-                      />
-                      {(block as any).caption && (
-                        <div className="text-sm text-gray-600 mt-2 text-center">
-                          {(block as any).caption}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {block.type === "table" && (
-                    <div className="overflow-x-auto">
-                      {(() => {
-                        try {
-                          const tableData = JSON.parse(
-                            block.content || '{"headers":[],"rows":[]}'
-                          );
-                          return (
-                            <table className="w-full border-collapse border border-gray-300">
-                              <thead>
-                                <tr>
-                                  {tableData.headers?.map(
-                                    (header: string, index: number) => (
-                                      <th
-                                        key={index}
-                                        className="border border-gray-300 p-2 bg-gray-50 font-semibold text-left"
-                                      >
-                                        {header}
-                                      </th>
-                                    )
-                                  )}
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {tableData.rows?.map(
-                                  (row: string[], rowIndex: number) => (
-                                    <tr key={rowIndex}>
-                                      {row.map(
-                                        (cell: string, cellIndex: number) => (
-                                          <td
-                                            key={cellIndex}
-                                            className="border border-gray-300 p-2"
-                                          >
-                                            {cell}
-                                          </td>
-                                        )
-                                      )}
-                                    </tr>
-                                  )
-                                )}
-                              </tbody>
-                            </table>
-                          );
-                        } catch {
-                          return (
-                            <div className="text-gray-500">
-                              표 데이터를 불러올 수 없습니다.
-                            </div>
-                          );
-                        }
-                      })()}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <Editor
+          page={page}
+          onPageUpdate={handlePageUpdate}
+          isSharedPage={true}
+        />
       </main>
 
       {isConnected && (
@@ -248,7 +234,7 @@ export const SharedPage: React.FC = () => {
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
               <span className="text-gray-600">
                 {onlineUsers.length > 0
-                  ? `${onlineUsers.length}명과 함께 보는 중`
+                  ? `${onlineUsers.length + 1}명이 함께 편집 중`
                   : "실시간 동기화됨"}
               </span>
             </div>
